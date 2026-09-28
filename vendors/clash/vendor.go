@@ -6,7 +6,7 @@ import (
 	"net"
 
 	"github.com/metacubex/mihomo/constant"
-	"github.com/miaokobot/miaospeed/interfaces"
+	"github.com/silencoo/speed-probe/interfaces"
 )
 
 type Clash struct {

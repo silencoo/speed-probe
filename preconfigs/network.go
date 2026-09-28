@@ -6,7 +6,7 @@ const NETCAT_HTTP_PAYLOAD = `GET %s HTTP/1.1
 Accept: */*
 Accept-Encoding: gzip, deflate
 Host: %s
-User-Agent: HTTPie/3.0.2 MiaoSpeed/%s
+User-Agent: HTTPie/3.0.2 speed-probe/%s
 
 `
 

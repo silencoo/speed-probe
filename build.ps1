@@ -3,11 +3,9 @@ Set-StrictMode -Version Latest
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DistDir = Join-Path $ProjectRoot "dist"
-$CertDir = if ($env:MIAOSPEED_TLS_OUTPUT_DIR) { $env:MIAOSPEED_TLS_OUTPUT_DIR } else { Join-Path $DistDir "certs" }
-$CertFile = Join-Path $CertDir "miaoko.crt"
-$KeyFile = Join-Path $CertDir "miaoko.key"
-$DefaultBuildToken = "MIAOKO4|580JxAo049R|GEnERAl|1X571R930|T0kEN"
-$BuildToken = if ($env:MIAOSPEED_BUILD_TOKEN) { $env:MIAOSPEED_BUILD_TOKEN } else { $DefaultBuildToken }
+$CertDir = if ($env:SPEED_PROBE_TLS_OUTPUT_DIR) { $env:SPEED_PROBE_TLS_OUTPUT_DIR } else { Join-Path $DistDir "certs" }
+$CertFile = Join-Path $CertDir "speed-probe.crt"
+$KeyFile = Join-Path $CertDir "speed-probe.key"
 
 function Assert-LastCommand([string]$Message) {
     if ($LASTEXITCODE -ne 0) {
@@ -30,12 +28,12 @@ function Test-TlsPair {
 function Initialize-TlsPair {
     New-Item -ItemType Directory -Force -Path $CertDir | Out-Null
 
-    $SourceCert = $env:MIAOSPEED_TLS_CERT_FILE
-    $SourceKey = $env:MIAOSPEED_TLS_KEY_FILE
+    $SourceCert = $env:SPEED_PROBE_TLS_CERT_FILE
+    $SourceKey = $env:SPEED_PROBE_TLS_KEY_FILE
 
     if ($SourceCert -or $SourceKey) {
         if (-not ($SourceCert -and $SourceKey)) {
-            throw "Set both MIAOSPEED_TLS_CERT_FILE and MIAOSPEED_TLS_KEY_FILE"
+            throw "Set both SPEED_PROBE_TLS_CERT_FILE and SPEED_PROBE_TLS_KEY_FILE"
         }
         if (-not (Test-Path -LiteralPath $SourceCert -PathType Leaf)) {
             throw "TLS certificate not found: $SourceCert"
@@ -55,7 +53,7 @@ function Initialize-TlsPair {
     elseif (Get-Command openssl -ErrorAction SilentlyContinue) {
         Write-Host "Generating a development self-signed TLS certificate..."
         & openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes `
-            -subj "/CN=miaospeed.local" `
+            -subj "/CN=speed-probe.local" `
             -keyout $KeyFile `
             -out $CertFile 2>$null
         Assert-LastCommand "Failed to generate the development TLS certificate"
@@ -71,9 +69,6 @@ function Initialize-TlsPair {
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
     throw "Go 1.21 or newer is required"
 }
-if ($BuildToken -match "\s") {
-    throw "MIAOSPEED_BUILD_TOKEN cannot contain whitespace"
-}
 
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 Initialize-TlsPair
@@ -81,10 +76,10 @@ Initialize-TlsPair
 $Commit = (& git -C $ProjectRoot rev-parse --short HEAD 2>$null)
 if ($LASTEXITCODE -ne 0) { $Commit = "unknown" }
 $CompilationTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-$LdFlags = "-s -w -X main.COMMIT=$Commit -X main.COMPILATIONTIME=$CompilationTime -X github.com/miaokobot/miaospeed/utils.BUILDTOKEN=$BuildToken"
-$OutputFile = Join-Path $DistDir "miaospeed.meta.exe"
+$LdFlags = "-s -w -X main.COMMIT=$Commit -X main.COMPILATIONTIME=$CompilationTime"
+$OutputFile = Join-Path $DistDir "speed-probe.exe"
 
-Write-Host "Building miaospeed with Mihomo support..."
+Write-Host "Building speed-probe with Mihomo support..."
 Push-Location $ProjectRoot
 try {
     & go build -trimpath -ldflags $LdFlags -o $OutputFile .

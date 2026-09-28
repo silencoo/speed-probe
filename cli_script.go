@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/service/macros/script"
-	"github.com/miaokobot/miaospeed/utils"
-	"github.com/miaokobot/miaospeed/vendors"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/service/macros/script"
+	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/vendors"
 )
 
 type ScriptTestCliParams struct {
@@ -41,7 +41,7 @@ func RunCliScriptTest() {
 	}
 
 	utils.VerboseLevel = utils.LTInfo
-	utils.DWarnf("MiaoSpeed speedtesting client %s", utils.VERSION)
+	utils.DWarnf("speed-probe network testing backend %s", utils.VERSION)
 
 	vendor := vendors.Find(interfaces.VendorLocal)
 	utils.DInfof("Script Test | Using vendor %s", vendor.Type())

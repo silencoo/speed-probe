@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/utils/structs"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/utils/structs"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -48,7 +48,7 @@ func (m *Script) Run(proxy interfaces.Vendor, r *interfaces.SlaveRequest) error 
 func init() {
 	// default strict to 32 concurrent script engine
 	// can be extended by setting env var
-	concurrency, _ := strconv.ParseInt(os.Getenv("MIAOKO_SCRIPT_CONCURRENCY"), 10, 64)
+	concurrency, _ := strconv.ParseInt(os.Getenv("SPEED_PROBE_SCRIPT_CONCURRENCY"), 10, 64)
 	concurrency = structs.WithInDefault(concurrency, 1, 64, 32)
 	scriptControl = semaphore.NewWeighted(concurrency)
 }

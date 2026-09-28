@@ -1,4 +1,4 @@
-module github.com/miaokobot/miaospeed
+module github.com/silencoo/speed-probe
 
 go 1.21
 

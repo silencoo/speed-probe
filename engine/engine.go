@@ -9,10 +9,10 @@ import (
 	"github.com/dop251/goja_nodejs/console"
 	"github.com/dop251/goja_nodejs/require"
 
-	"github.com/miaokobot/miaospeed/engine/factory"
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/utils"
-	"github.com/miaokobot/miaospeed/utils/structs"
+	"github.com/silencoo/speed-probe/engine/factory"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/utils/structs"
 )
 
 func VMNew() *goja.Runtime {

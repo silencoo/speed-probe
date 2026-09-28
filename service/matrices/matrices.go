@@ -1,19 +1,19 @@
 package matrices
 
 import (
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/utils/structs"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/utils/structs"
 
-	"github.com/miaokobot/miaospeed/service/matrices/averagespeed"
-	"github.com/miaokobot/miaospeed/service/matrices/httpping"
-	"github.com/miaokobot/miaospeed/service/matrices/inboundgeoip"
-	"github.com/miaokobot/miaospeed/service/matrices/invalid"
-	"github.com/miaokobot/miaospeed/service/matrices/maxspeed"
-	"github.com/miaokobot/miaospeed/service/matrices/outboundgeoip"
-	"github.com/miaokobot/miaospeed/service/matrices/persecondspeed"
-	"github.com/miaokobot/miaospeed/service/matrices/rttping"
-	"github.com/miaokobot/miaospeed/service/matrices/scripttest"
-	"github.com/miaokobot/miaospeed/service/matrices/udptype"
+	"github.com/silencoo/speed-probe/service/matrices/averagespeed"
+	"github.com/silencoo/speed-probe/service/matrices/httpping"
+	"github.com/silencoo/speed-probe/service/matrices/inboundgeoip"
+	"github.com/silencoo/speed-probe/service/matrices/invalid"
+	"github.com/silencoo/speed-probe/service/matrices/maxspeed"
+	"github.com/silencoo/speed-probe/service/matrices/outboundgeoip"
+	"github.com/silencoo/speed-probe/service/matrices/persecondspeed"
+	"github.com/silencoo/speed-probe/service/matrices/rttping"
+	"github.com/silencoo/speed-probe/service/matrices/scripttest"
+	"github.com/silencoo/speed-probe/service/matrices/udptype"
 )
 
 var registeredList = map[interfaces.SlaveRequestMatrixType]func() interfaces.SlaveRequestMatrix{

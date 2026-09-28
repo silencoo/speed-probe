@@ -5,8 +5,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/miaokobot/miaospeed/utils"
 	"github.com/pion/stun"
+	"github.com/silencoo/speed-probe/utils"
 )
 
 type NATMapType int

@@ -6,10 +6,10 @@ import (
 	"os"
 	"path"
 
-	"github.com/miaokobot/miaospeed/utils"
+	"github.com/silencoo/speed-probe/utils"
 )
 
-var cmdName string = "miaospeed"
+var cmdName string = "speed-probe"
 
 type SubCliType string
 
@@ -27,6 +27,8 @@ func RunCli() {
 
 	cmdName = path.Base(os.Args[0])
 	switch subCmd {
+	case "clients":
+		RunCliClients()
 	case SCTMisc:
 		RunCliMisc()
 	case SCTServer:
@@ -53,12 +55,13 @@ func RunCliDefault() {
 
 	fmt.Printf("\n")
 	fmt.Printf("Subcommands of %s:\n", cmdName)
+	fmt.Printf("  clients\n        manage client credentials (add, list, set, revoke, rotate, export).\n")
 	fmt.Printf("  server\n")
-	fmt.Printf("        start the miaospeed backend as a server.\n")
+	fmt.Printf("        start the speed-probe backend as a server.\n")
 	fmt.Printf("  script\n")
 	fmt.Printf("        run a temporary script test to test the correctness of your script.\n")
 	fmt.Printf("  misc\n")
-	fmt.Printf("        other utility toolkit provided by miaospeed.\n")
+	fmt.Printf("        other utility toolkit provided by speed-probe.\n")
 
 	os.Exit(0)
 }

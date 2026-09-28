@@ -26,8 +26,9 @@ type SlaveProgress struct {
 }
 
 type SlaveResponse struct {
-	ID               string
-	MiaoSpeedVersion string
+	Capabilities []string
+	ID           string
+	Version      string
 
 	Error    string
 	Result   *SlaveTask

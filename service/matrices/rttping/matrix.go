@@ -1,8 +1,8 @@
 package rttping
 
 import (
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/service/macros/ping"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/service/macros/ping"
 )
 
 type RTTPing struct {

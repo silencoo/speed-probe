@@ -3,8 +3,8 @@ package service
 import (
 	"time"
 
-	"github.com/miaokobot/miaospeed/service/taskpoll"
-	"github.com/miaokobot/miaospeed/utils"
+	"github.com/silencoo/speed-probe/service/taskpoll"
+	"github.com/silencoo/speed-probe/utils"
 )
 
 var SpeedTaskPoll *taskpoll.TaskPollController

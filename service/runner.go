@@ -1,9 +1,9 @@
 package service
 
 import (
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/service/macros"
-	"github.com/miaokobot/miaospeed/utils/structs"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/service/macros"
+	"github.com/silencoo/speed-probe/utils/structs"
 )
 
 func ExtractMacrosFromMatrices(matrices []interfaces.SlaveRequestMatrix) []interfaces.SlaveRequestMacroType {

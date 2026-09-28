@@ -4,8 +4,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/utils"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/utils"
 )
 
 func RemoteLookup(p interfaces.Vendor, script string, retry int) *interfaces.IPStacks {

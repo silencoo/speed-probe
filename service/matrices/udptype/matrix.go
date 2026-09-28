@@ -1,8 +1,8 @@
 package udptype
 
 import (
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/service/macros/udp"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/service/macros/udp"
 )
 
 type UDPType struct {

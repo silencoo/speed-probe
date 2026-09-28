@@ -2,9 +2,9 @@ package factory
 
 import (
 	"github.com/dop251/goja"
-	"github.com/miaokobot/miaospeed/engine/helpers"
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/vendors"
+	"github.com/silencoo/speed-probe/engine/helpers"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/vendors"
 )
 
 func NetCatFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.RequestOptionsNetwork) func(call goja.FunctionCall) goja.Value {

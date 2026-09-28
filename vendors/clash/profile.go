@@ -3,8 +3,8 @@ package clash
 import (
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/constant"
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/utils"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/utils"
 	"gopkg.in/yaml.v2"
 )
 

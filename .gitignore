@@ -1,4 +1,6 @@
 # Build artifacts
+/speed-probe
+/speed-probe.meta
 /miaospeed
 /miaospeed.meta
 *.exe
@@ -12,9 +14,12 @@ go.mod.bak
 test.yaml
 config.yaml
 .history.yaml
+/clients.json
+/clients.json.lock
+/.clients-*
+/connection*.json
 
 # Generated or externally supplied credentials
-/utils/embeded/BUILDTOKEN.key
 /preconfigs/embeded/miaokoCA/*.crt
 /preconfigs/embeded/miaokoCA/*.key
 /preconfigs/embeded/miaokoCA/*.pem

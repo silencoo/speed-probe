@@ -4,9 +4,9 @@ import (
 	"net"
 	"strings"
 
-	"github.com/miaokobot/miaospeed/engine"
-	"github.com/miaokobot/miaospeed/engine/helpers"
-	"github.com/miaokobot/miaospeed/interfaces"
+	"github.com/silencoo/speed-probe/engine"
+	"github.com/silencoo/speed-probe/engine/helpers"
+	"github.com/silencoo/speed-probe/interfaces"
 )
 
 func ExecIpCheck(p interfaces.Vendor, script string, network interfaces.RequestOptionsNetwork) (ipstacks *interfaces.IPStacks) {

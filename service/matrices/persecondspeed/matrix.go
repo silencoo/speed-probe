@@ -1,8 +1,8 @@
 package persecondspeed
 
 import (
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/service/macros/speed"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/service/macros/speed"
 )
 
 type PerSecondSpeed struct {

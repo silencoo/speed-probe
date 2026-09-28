@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miaokobot/miaospeed/utils/structs/memutils"
+	"github.com/silencoo/speed-probe/utils/structs/memutils"
 )
 
 type ObliviousMap[T any] struct {

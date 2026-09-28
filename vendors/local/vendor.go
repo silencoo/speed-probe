@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/miaokobot/miaospeed/interfaces"
+	"github.com/silencoo/speed-probe/interfaces"
 )
 
 type Local struct {

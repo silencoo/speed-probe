@@ -1,6 +1,6 @@
 package invalid
 
-import "github.com/miaokobot/miaospeed/interfaces"
+import "github.com/silencoo/speed-probe/interfaces"
 
 type Invalid struct{}
 

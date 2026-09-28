@@ -4,14 +4,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/service/macros"
-	"github.com/miaokobot/miaospeed/service/macros/invalid"
-	"github.com/miaokobot/miaospeed/service/matrices"
-	"github.com/miaokobot/miaospeed/service/taskpoll"
-	"github.com/miaokobot/miaospeed/utils"
-	"github.com/miaokobot/miaospeed/utils/structs"
-	"github.com/miaokobot/miaospeed/vendors"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/service/macros"
+	"github.com/silencoo/speed-probe/service/macros/invalid"
+	"github.com/silencoo/speed-probe/service/matrices"
+	"github.com/silencoo/speed-probe/service/taskpoll"
+	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/utils/structs"
+	"github.com/silencoo/speed-probe/vendors"
 )
 
 type TestingPollItem struct {
@@ -28,6 +28,7 @@ type TestingPollItem struct {
 
 	onProcessLock sync.Mutex
 	exitOnce      sync.Once
+	authorize     func() error
 }
 
 func (tpi *TestingPollItem) ID() string {
@@ -66,6 +67,10 @@ func (tpi *TestingPollItem) Yield(idx int, tpc *taskpoll.TaskPollController) {
 		tpi.onProcess(tpi, idx, result)
 	}()
 
+	// Recheck queued work after a client is revoked or its key is rotated.
+	if tpi.authorize != nil && tpi.authorize() != nil {
+		return
+	}
 	node := tpi.request.Nodes[idx]
 	vendor := vendors.Find(tpi.request.Vendor).Build(node.Name, node.Payload)
 	result.ProxyInfo = vendor.ProxyInfo()

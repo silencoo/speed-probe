@@ -1,29 +1,17 @@
 builds:
-  - id: miaospeed
+  - id: speed-probe
     dir: .
-    binary: miaospeed
+    binary: speed-probe
     ldflags:
       - -s -w -X "main.COMMIT={{.Commit}}" -X "main.BUILDCOUNT={{.Env.BUILDCOUNT}}" -X "main.BRAND={{.Env.BRAND}}" -X "main.COMPILATIONTIME={{.Env.COMPILATIONTIME}}"
     goos:
       - darwin
       - linux
       - windows
-  - id: miaospeed.meta
-    dir: .
-    binary: miaospeed.meta
-    ldflags:
-      - -s -w -X "main.COMMIT={{.Commit}}" -X "main.BUILDCOUNT={{.Env.BUILDCOUNT}}" -X "main.BRAND={{.Env.BRAND}}" -X "main.COMPILATIONTIME={{.Env.COMPILATIONTIME}}"
-    goos:
-      - darwin
-      - linux
-      - windows
-    hooks:
-      pre: ./build.release.hook.pre.sh
-      post: ./build.release.hook.post.sh
 archives:
   - files:
     - README.md
 release:
   github:
-    owner: miaokobot
-    name: miaospeed
+    owner: silencoo
+    name: speed-probe

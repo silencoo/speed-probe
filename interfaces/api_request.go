@@ -21,7 +21,6 @@ type SlaveRequestBasics struct {
 	ID        string
 	Slave     string
 	SlaveName string
-	Invoker   string
 	Version   string
 }
 
@@ -30,7 +29,6 @@ func (srb *SlaveRequestBasics) Clone() *SlaveRequestBasics {
 		ID:        srb.ID,
 		Slave:     srb.Slave,
 		SlaveName: srb.SlaveName,
-		Invoker:   srb.Invoker,
 		Version:   srb.Version,
 	}
 }
@@ -54,19 +52,14 @@ type SlaveRequest struct {
 
 	Vendor VendorType
 	Nodes  []SlaveRequestNode
-
-	RandomSequence string
-	Challenge      string
 }
 
 func (sr *SlaveRequest) Clone() *SlaveRequest {
 	return &SlaveRequest{
-		Basics:         *sr.Basics.Clone(),
-		Options:        *sr.Options.Clone(),
-		Configs:        *sr.Configs.Clone(),
-		Vendor:         sr.Vendor,
-		Nodes:          cloneSlice(sr.Nodes),
-		RandomSequence: sr.RandomSequence,
-		Challenge:      sr.Challenge,
+		Basics:  *sr.Basics.Clone(),
+		Options: *sr.Options.Clone(),
+		Configs: *sr.Configs.Clone(),
+		Vendor:  sr.Vendor,
+		Nodes:   cloneSlice(sr.Nodes),
 	}
 }

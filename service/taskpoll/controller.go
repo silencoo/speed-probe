@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/miaokobot/miaospeed/utils"
-	"github.com/miaokobot/miaospeed/utils/structs"
+	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/utils/structs"
 )
 
 type TaskPollExitCode uint
@@ -19,7 +19,8 @@ const (
 
 type taskPollItemWrapper struct {
 	TaskPollItem
-	counter int
+	counter  int
+	exitCode TaskPollExitCode
 
 	exitOnce sync.Once
 }
@@ -101,7 +102,7 @@ func (tpc *TaskPollController) release(tpw *taskPollItemWrapper) {
 
 	if !inWaitList && tpc.runningTask[tpw.ID()] == 0 {
 		delete(tpc.runningTask, tpw.ID())
-		tpw.OnExit(TPExitSuccess)
+		tpw.OnExit(tpw.exitCode)
 	}
 
 	if tpc.current > 0 {
@@ -173,7 +174,11 @@ func (tpc *TaskPollController) remove_unsafe(id string, exitCode TaskPollExitCod
 
 	if tp != nil && exitCode != TPExitSuccess {
 		utils.DWarnf("Task Poll | Task interrupted, id=%v reason=%v", id, exitCode)
-		tp.OnExit(exitCode)
+		tp.exitCode = exitCode
+		// Running nodes still own their client slot until their work finishes.
+		if tpc.runningTask[id] == 0 {
+			tp.OnExit(exitCode)
+		}
 	}
 }
 

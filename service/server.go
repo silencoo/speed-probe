@@ -1,19 +1,22 @@
 package service
 
 import (
+	"github.com/silencoo/speed-probe/auth"
 	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/miaokobot/miaospeed/interfaces"
-	"github.com/miaokobot/miaospeed/preconfigs"
-	"github.com/miaokobot/miaospeed/utils"
-	"github.com/miaokobot/miaospeed/utils/structs"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/preconfigs"
+	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/utils/structs"
 
-	"github.com/miaokobot/miaospeed/service/matrices"
-	"github.com/miaokobot/miaospeed/service/taskpoll"
+	"github.com/silencoo/speed-probe/service/matrices"
+	"github.com/silencoo/speed-probe/service/taskpoll"
 )
 
 type WsHandler struct {
@@ -32,21 +35,30 @@ var upgrader = websocket.Upgrader{
 }
 
 func InitServer() {
+	manager := auth.NewManager(utils.GCFG.ClientsFile)
 	if utils.GCFG.Binder == "" {
-		utils.DErrorf("MiaoSpeed Server | Cannot listening the binder, bind=%s", utils.GCFG.Binder)
+		utils.DErrorf("speed-probe Server | Cannot listening the binder, bind=%s", utils.GCFG.Binder)
 		os.Exit(1)
 	}
 
-	utils.DWarnf("MiaoSpeed Server | Start Listening, bind=%s", utils.GCFG.Binder)
+	utils.DWarnf("speed-probe Server | Start Listening, bind=%s", utils.GCFG.Binder)
 
 	wsHandler := WsHandler{
 		Serve: func(rw http.ResponseWriter, r *http.Request) {
 			conn, err := upgrader.Upgrade(rw, r, nil)
 			if err != nil {
-				utils.DErrorf("MiaoServer Test | Socket establishing error, error=%s", err.Error())
+				utils.DErrorf("speed-probe Test | Socket establishing error, error=%s", err.Error())
 				return
 			}
 			defer conn.Close()
+			conn.SetReadLimit(16 << 20)
+			var writeMu sync.Mutex
+			writeJSON := func(v interface{}) error {
+				writeMu.Lock()
+				defer writeMu.Unlock()
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				return conn.WriteJSON(v)
+			}
 
 			var poll *taskpoll.TaskPollController
 
@@ -61,35 +73,52 @@ func InitServer() {
 
 			defer cancel()
 			for {
-				sr := interfaces.SlaveRequest{}
-				err := conn.ReadJSON(&sr)
+				_, data, err := conn.ReadMessage()
 				if err != nil {
-					if !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "reset by peer") {
-						utils.DErrorf("MiaoServer Test | Task receiving error, error=%s", err.Error())
+					return
+				}
+				request, client, err := authenticate(data, manager)
+				if err != nil {
+					writeJSON(&interfaces.SlaveResponse{Error: err.Error()})
+					return
+				}
+				sr := *request
+				sr.Configs = *sr.Configs.Check()
+				for i := range sr.Configs.Scripts {
+					if sr.Configs.Scripts[i].TimeoutMillis == 0 {
+						sr.Configs.Scripts[i].TimeoutMillis = 10000
 					}
-
+					if sr.Configs.Scripts[i].TimeoutMillis > 60000 {
+						sr.Configs.Scripts[i].TimeoutMillis = 60000
+					}
+				}
+				caps := append([]string{}, client.Capabilities...)
+				if utils.GCFG.NoSpeedFlag {
+					filtered := []string{}
+					for _, c := range caps {
+						if c != "speed" {
+							filtered = append(filtered, c)
+						}
+					}
+					caps = filtered
+				}
+				if len(sr.Nodes) == 0 {
+					writeJSON(&interfaces.SlaveResponse{Version: utils.VERSION, Capabilities: caps,
+						Result: &interfaces.SlaveTask{Results: []interfaces.SlaveEntrySlot{}}})
 					return
 				}
-
-				verified := utils.GCFG.VerifyRequest(&sr)
-				utils.DLogf("MiaoServer Test | Receive Task, name=%s invoker=%v matrices=%v payload=%d verify=%v", sr.Basics.ID, sr.Basics.Invoker, sr.Options.Matrices, len(sr.Nodes), verified)
-
-				// verify token
-				if !verified {
-					conn.WriteJSON(&interfaces.SlaveResponse{
-						Error: "cannot verify the request, please check your token",
-					})
+				release, err := manager.Acquire(*client)
+				if err != nil {
+					writeJSON(&interfaces.SlaveResponse{Error: err.Error()})
 					return
 				}
-				sr.Challenge = ""
-
-				// verify invoker
-				if !utils.GCFG.InWhiteList(sr.Basics.Invoker) {
-					conn.WriteJSON(&interfaces.SlaveResponse{
-						Error: "the bot id is not in the whitelist",
-					})
-					return
-				}
+				authorize := func() error { return manager.StillAllowed(*client, &sr) }
+				submitted := false
+				defer func() {
+					if !submitted {
+						release()
+					}
+				}()
 
 				// find all matrices
 				matrices := matrices.FindBatchFromEntry(sr.Options.Matrices)
@@ -100,7 +129,7 @@ func InitServer() {
 				// select poll
 				if structs.Contains(macros, interfaces.MacroSpeed) {
 					if utils.GCFG.NoSpeedFlag {
-						conn.WriteJSON(&interfaces.SlaveResponse{
+						writeJSON(&interfaces.SlaveResponse{
 							Error: "speedtest is disabled on backend",
 						})
 						return
@@ -109,19 +138,20 @@ func InitServer() {
 				} else {
 					poll = ConnTaskPoll
 				}
-				utils.DLogf("MiaoServer Test | Receive Task, name=%s poll=%s", sr.Basics.ID, poll.Name())
+				utils.DLogf("speed-probe Test | Receive Task, name=%s poll=%s", sr.Basics.ID, poll.Name())
 
 				// build testing item
 				item := poll.Push((&TestingPollItem{
-					id:       utils.RandomUUID(),
-					name:     sr.Basics.ID,
-					request:  &sr,
-					matrices: sr.Options.Matrices,
-					macros:   macros,
+					id:        utils.RandomUUID(),
+					name:      sr.Basics.ID,
+					request:   &sr,
+					authorize: authorize,
+					matrices:  sr.Options.Matrices,
+					macros:    macros,
 					onProcess: func(self *TestingPollItem, idx int, result interfaces.SlaveEntrySlot) {
-						conn.WriteJSON(&interfaces.SlaveResponse{
-							ID:               self.ID(),
-							MiaoSpeedVersion: utils.VERSION,
+						writeJSON(&interfaces.SlaveResponse{
+							ID:      self.ID(),
+							Version: utils.VERSION,
 							Progress: &interfaces.SlaveProgress{
 								Record:  result,
 								Index:   idx,
@@ -130,10 +160,11 @@ func InitServer() {
 						})
 					},
 					onExit: func(self *TestingPollItem, exitCode taskpoll.TaskPollExitCode) {
+						release()
 						batches.Del(self.ID())
-						conn.WriteJSON(&interfaces.SlaveResponse{
-							ID:               self.ID(),
-							MiaoSpeedVersion: utils.VERSION,
+						writeJSON(&interfaces.SlaveResponse{
+							ID:      self.ID(),
+							Version: utils.VERSION,
 							Result: &interfaces.SlaveTask{
 								Request: sr,
 								Results: self.results.ForEach(),
@@ -142,7 +173,11 @@ func InitServer() {
 					},
 				}).Init())
 
+				submitted = true
 				batches.Set(item.ID(), true)
+				// One task per connection. Keep reading so a disconnect cancels it.
+				conn.ReadMessage()
+				return
 			}
 		},
 	}
@@ -152,20 +187,20 @@ func InitServer() {
 	if strings.HasPrefix(utils.GCFG.Binder, "/") {
 		unixListener, err := net.Listen("unix", utils.GCFG.Binder)
 		if err != nil {
-			utils.DErrorf("MiaoServer Launch | Cannot listen on unixsocket %s, error=%s", utils.GCFG.Binder, err.Error())
+			utils.DErrorf("speed-probe Launch | Cannot listen on unixsocket %s, error=%s", utils.GCFG.Binder, err.Error())
 			os.Exit(1)
 		}
 		server.Serve(unixListener)
 	} else {
 		netListener, err := net.Listen("tcp", utils.GCFG.Binder)
 		if err != nil {
-			utils.DErrorf("MiaoServer Launch | Cannot listen on socket %s, error=%s", utils.GCFG.Binder, err.Error())
+			utils.DErrorf("speed-probe Launch | Cannot listen on socket %s, error=%s", utils.GCFG.Binder, err.Error())
 			os.Exit(1)
 		}
-		if utils.GCFG.MiaoKoSignedTLS {
+		if utils.GCFG.TLS {
 			tlsConfig, err := preconfigs.MakeTLSServer(utils.GCFG.TLSCertFile, utils.GCFG.TLSKeyFile)
 			if err != nil {
-				utils.DErrorf("MiaoServer Launch | Cannot configure TLS, error=%s", err.Error())
+				utils.DErrorf("speed-probe Launch | Cannot configure TLS, error=%s", err.Error())
 				os.Exit(1)
 			}
 			server.TLSConfig = tlsConfig
