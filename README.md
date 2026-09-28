@@ -8,7 +8,7 @@ speed-probe 是一个通过 WebSocket 接收任务的网络质量测试后端。
 
 ## 环境要求
 
-- Go 1.21 或更高版本
+- Go 1.25.5 或更高版本
 - Bash 或 PowerShell
 - OpenSSL（可选，用于生成本地开发 TLS 证书）
 
@@ -36,10 +36,10 @@ Windows PowerShell：
 也可以直接构建：
 
 ```bash
-go build -o dist/speed-probe .
+go build -tags with_utls -o dist/speed-probe .
 ```
 
-直接构建不会生成 TLS 证书。服务端仅接受独立客户端凭据签名的请求，创建与管理方式见 [客户端认证](AUTH.md)。
+直接构建不会生成 TLS 证书。服务端通过 TLS + 独立 API Token 验证客户端，创建与管理方式见 [客户端认证](AUTH.md)。
 
 ## TLS 证书
 
@@ -54,7 +54,7 @@ TLS 私钥不会嵌入源码或二进制。启用 TLS 时必须同时指定证�
   -tls-key ./dist/certs/speed-probe.key
 ```
 
-`-tls` 启用服务端 TLS；客户端身份由签名凭据验证。
+`-tls` 启用服务端 TLS；客户端身份由 API Token 验证。
 
 构建脚本支持从外部路径复制固定证书，而不是生成开发证书：
 
@@ -74,7 +74,7 @@ bash ./build.sh
 
 ## 启动服务
 
-先创建客户端：`./dist/speed-probe clients add -id main-bot`。导出连接、撤销、轮换和修改权限的命令见 [AUTH.md](AUTH.md)。
+先创建客户端：`./dist/speed-probe clients add -id main-bot -address ws://127.0.0.1:8765 -out connection.json`。签发连接、撤销、轮换、安装脚本和修改权限的命令见 [AUTH.md](AUTH.md)。
 
 最小示例：
 
@@ -89,6 +89,7 @@ bash ./build.sh
 | 参数 | 说明 |
 | --- | --- |
 | `-bind` | TCP 地址或 Unix socket，例如 `0.0.0.0:8765` |
+| `-scripts` | 操作者安装的脚本目录 JSON，详见 AUTH.md |
 | `-clients` | 客户端配置文件，默认 `clients.json` |
 | `-connthread` | 普通连接测试的并发数，默认 `64` |
 | `-speedlimit` | 速度测试限速，单位 Byte/s；`0` 表示不限制 |
@@ -132,9 +133,9 @@ MMDB 数据库体积较大且会定期更新，因此不进入版本控制。下
 
 ## 客户端对接
 
-客户端使用 [v2 信封与 HMAC 签名](AUTH.md)。按 [`interfaces/api_request.go`](interfaces/api_request.go) 构造请求，将完整 JSON 字符串放入签名信封后通过 WebSocket 发送；按 [`interfaces/api_response.go`](interfaces/api_response.go) 接收进度和结果。响应版本字段为 `Version`。
+客户端使用 [v3 协议](PROTOCOL.md)：WebSocket 握手携带 Authorization Bearer Token，再发送 describe 或 run。describe 分开返回 supported、allowed、limits、scripts；任务返回 accepted、progress、finished，并支持 cancel。
 
-客户端强制断开连接时，对应任务会被中止。
+每个任务有独立 ID，每个节点结果带原始 index。任务断线取消，不自动恢复或重试。软件版本与协议版本分开；旧 HMAC 信封和 v2 客户端存储不兼容。迁移步骤见 [AUTH.md](AUTH.md)。
 
 ## 项目结构
 
@@ -153,3 +154,7 @@ MMDB 数据库体积较大且会定期更新，因此不进入版本控制。下
 speed-probe 使用 AGPL-3.0 许可证。修改、分发或通过网络提供服务时，请遵守该许可证的相关义务。
 
 主要依赖包括 Mihomo、goja、json-iterator、pion/stun、go-yaml 和 gorilla/websocket；各依赖分别遵循其自身许可证。
+
+## Mihomo / sing-box 双内核
+
+内核版本、原生参数、构建标签及支持范围见 [CORES.md](CORES.md)。

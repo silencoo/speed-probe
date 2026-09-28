@@ -1,67 +1,77 @@
-# 客户端认证 v2
+# 客户端认证 v3
 
-speed-probe 管理客户端身份与能力，speed-control 管理 Telegram 用户。后端不需要维护 Telegram 用户或 Bot ID 名单。
+speed-control 管理 Telegram 用户，speed-probe 管理独立客户端。远程使用 WSS，握手通过 `Authorization: Bearer <token>` 认证。此认证不证明后端程序未修改或测速结果真实。
 
 ## 创建并接入
 
 ```powershell
-.\dist\speed-probe.exe clients add -id main-bot -capabilities ping,script,topo,speed -max-nodes 300 -max-jobs 2
-.\dist\speed-probe.exe clients export -id main-bot -address ws://127.0.0.1:8765 -out connection.json
+.\dist\speed-probe.exe clients add -id main-bot -address ws://127.0.0.1:8765 -out connection.json -capabilities ping,script,topo,speed -max-nodes 300 -max-jobs 2 -max-seconds 600 -max-scripts 32
 .\dist\speed-probe.exe server -bind 127.0.0.1:8765 -clients clients.json
 ```
 
-在 speed-control 管理员私聊中上传 `connection.json`，回复文件发送 `/backend import`。控制端会验证连接并保存凭据。同机测试可使用上述回环地址；远程部署使用 `wss://`，并在服务端配置 `-tls -tls-cert ... -tls-key ...` 或通过 TLS 反向代理提供服务。
+在管理员与 Bot 的私聊中上传 connection.json，回复发送 `/backend import`。导入时调用 describe 验证凭据、获取能力与限制。远程改用 wss://，服务端配置 -tls/-tls-cert/-tls-key，或让本机 TLS 反向代理转发至回环监听地址。服务端拒绝来自非回环 TCP 对端的明文连接，不信任 X-Forwarded-Proto。
 
-`clients.json` 默认位于当前工作目录，可通过所有 `clients` 子命令的 `-file` 和服务端 `-clients` 指定同一个绝对路径。客户端密钥由安全随机数生成，导出文件只写到 `-out` 指定的新文件，不在终端打印密钥。
+客户端存储默认是当前目录下的 clients.json，CLI 的 -file 与服务端的 -clients 应指向同一个文件。存储仅保存高熵 token 的 SHA-256 哈希。token 格式为 client_id.随机64位十六进制字符串。
 
-## 日常管理
+原 token 仅在 add 或 rotate 时写入 -out 指定的新文件，不打印到终端。连接文件保管在部署环境，不加入 Git。文件创建使用 0600；Windows 上另以账户及目录 ACL 管理访问。
+
+## 管理
 
 ```powershell
 .\dist\speed-probe.exe clients list
 .\dist\speed-probe.exe clients set -id main-bot -capabilities ping,topo -max-nodes 100 -max-jobs 1
-.\dist\speed-probe.exe clients rotate -id main-bot
-.\dist\speed-probe.exe clients export -id main-bot -address wss://probe.example.com:8765 -out connection-new.json
+.\dist\speed-probe.exe clients rotate -id main-bot -address wss://probe.example.com:8765 -out connection-new.json
 .\dist\speed-probe.exe clients revoke -id main-bot
 ```
 
-`set` 只修改显式给出的参数；`rotate` 更换密钥，需要重新导出并导入；`revoke` 禁用该客户端，不影响其他客户端。禁用后若需要新接入，可创建一个新客户端 ID。
+set 只改显式参数。rotate 后重新导入新连接文件；由于服务端没有原 token，不再提供 export。丢失连接文件也通过 rotate 重新签发。revoke 禁用客户端，重新接入可创建新 ID。
 
-配置在每个新请求和每个待执行节点开始前重新读取，不需要重启。撤销或轮换后，排队的节点不再开始测试；已经执行中的网络操作会自然结束，不保证立即中断。连接断开会移除尚未开始的节点；运行中的节点结束前仍占用客户端任务配额。
+CLI 使用锁文件及临时文件替换客户端存储。服务端检查文件元数据，在文件替换/变化时刷新经过验证的内存快照，不在每个节点上重复解析整个文件。无效更新失败关闭，不继续使用旧策略。每个节点开始前复查授权，活动任务另外每秒复查；撤销、轮换或能力收紧使不再被允许的任务失败并取消剩余工作。新任务采用当前限额；已启动任务保留原先的总期限。
 
-| 能力 | 对应测试 |
+## 能力与限制
+
+| 能力 | 测试 |
 | --- | --- |
-| `ping` | HTTP 延迟、RTT、UDP/NAT |
-| `script` | 自定义 JavaScript，包括自定义 IP 脚本 |
-| `topo` | 入口/出口 GeoIP |
-| `speed` | 平均、最大、每秒下载速度 |
+| ping | HTTP 延迟、RTT、UDP/NAT |
+| script | 运行后端已安装的媒体测试脚本 |
+| topo | 入口/出口 GeoIP |
+| speed | 下载速度；全局 -nospeed 优先 |
+| custom_script | 上传自定义 JS 内容，包括自定义 IP 脚本；需显式授权 |
 
-客户端有单次节点上限 `max_nodes` 和排队/执行任务上限 `max_jobs`。全局 `-nospeed` 仍优先于客户端的 `speed` 权限。`script` 允许执行会发起网络请求的自定义检测脚本，并不等同于严格的流量配额；原有脚本引擎不是不可信代码沙箱。
+script 与 custom_script 分开；上传媒体测试脚本需要两项授权。普通客户端默认没有 custom_script。自定义 JS 可主动发起网络请求，不等同于严格流量配额，Goja 也不构成不可信代码隔离沙箱。
 
-## 签名协议
+max_nodes 为单次节点上限，max_jobs 同时统计排队与执行任务；max_seconds 覆盖排队和执行的总时间；max_scripts 为单次脚本数。取消或断线后，运行的工作实际退出才释放任务配额。
 
-每个 WebSocket 连接提交一个 v2 信封：
+## 安装脚本
+
+服务端通过 `-scripts probe-scripts.json` 加载操作者维护的脚本目录：
 
 ```json
-{
-  "version": 2,
-  "client_id": "main-bot",
-  "timestamp": 1700000000,
-  "nonce": "32位十六进制随机字符串",
-  "signature": "HMAC-SHA256 的十六进制结果",
-  "payload": "原请求的 JSON 字符串"
-}
+[
+  {
+    "ID": "example",
+    "Type": "media",
+    "Content": "function handler() { return 'ok'; }",
+    "TimeoutMillis": 10000
+  }
+]
 ```
 
-以 UTF-8 编码的密钥字符串为 HMAC key，以以下拼接结果为 message：
+Type 为 media 或 ip，ID 唯一；目录最多 4 MB，启动时读取，修改后重启后端。请求只发送 ID 时使用目录中的内容与超时，不允许客户端覆盖已安装内容，除非拥有 custom_script。describe 仅返回脚本 ID 和类型，不泄露源码。
 
-```text
-speed-probe/v2\n{client_id}\n{timestamp}\n{nonce}\n{payload}
+在 speed-control 根目录可导出配置中的 JS，交由后端操作者审阅并安装：
+
+```powershell
+.\.venv\Scripts\python.exe -m utils.export_probe_scripts --config config.yaml --out probe-scripts.json
 ```
 
-这里的 `\n` 表示换行。`payload` 保留客户端原始字符串字节，不重新序列化，签名覆盖完整请求（含 Vendor）。有效时间窗口为前后 120 秒。相同客户端的 nonce 在窗口内只能使用一次；重放缓存保存在进程内，重启会清空。两端需要正确系统时间。
+## 从 v2 升级
 
-空节点请求用于已认证的健康检查，响应 `Capabilities` 返回当前有效能力（包含 `-nospeed` 的限制），不创建测试任务。响应中的 `Version` 表示后端版本，`Progress` 和 `Result` 分别返回进度与最终结果。
+这是不兼容升级，两端需同时更新：
 
-## 凭据存储
+1. 停止旧服务并备份客户端存储及控制端 access.sqlite3。
+2. 用新的文件名创建 v3 客户端，例如 add -file clients-v3.json ...；不要覆盖旧文件试图自动转换。
+3. 后端以 -clients clients-v3.json 启动，按需要安装脚本目录。
+4. 控制端导入新连接文件。使用相同 id 可替换旧连接，用户授权不变。未重新导入的 v2 后端不会被使用。
 
-客户端存储、导出连接文件及其中的密钥应保留在部署环境，默认文件名已加入 `.gitignore`。CLI 使用临时文件原子替换，并使用锁文件防止同时写入；如果管理进程异常终止，确认没有其他管理命令运行后再删除残留 `.lock` 文件。
+旧 HMAC、nonce、旧连接文件与旧客户端存储均不兼容。协议详情见 [PROTOCOL.md](PROTOCOL.md)。

@@ -1,54 +1,47 @@
-// Package auth implements versioned client authentication, independent of Telegram.
+// Package auth authenticates API clients; it does not attest backend software.
 package auth
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/silencoo/speed-probe/interfaces"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
+	"strings"
 	"sync"
-	"time"
-
-	"github.com/silencoo/speed-probe/interfaces"
 )
 
-var Capabilities = []string{"ping", "script", "topo", "speed"}
-var validID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,40}$`)
+const Protocol = 3
+
+var Capabilities = []string{"ping", "script", "topo", "speed", "custom_script"}
+var validID = regexp.MustCompile("^[a-zA-Z0-9_-]{1,64}$")
 
 type Client struct {
 	ID           string   `json:"id"`
-	Secret       string   `json:"secret"`
+	TokenHash    string   `json:"token_hash"`
 	Capabilities []string `json:"capabilities"`
 	Disabled     bool     `json:"disabled"`
 	MaxNodes     int      `json:"max_nodes"`
 	MaxJobs      int      `json:"max_jobs"`
+	MaxSeconds   int      `json:"max_seconds"`
+	MaxScripts   int      `json:"max_scripts"`
 }
 type Store struct {
+	Version int      `json:"version"`
 	Clients []Client `json:"clients"`
 }
-type Envelope struct {
-	Version   int    `json:"version"`
-	ClientID  string `json:"client_id"`
-	Timestamp int64  `json:"timestamp"`
-	Nonce     string `json:"nonce"`
-	Signature string `json:"signature"`
-	// A string preserves exactly the bytes signed by clients in other languages.
-	Payload string `json:"payload"`
-}
 type Connection struct {
-	Version  int    `json:"version"`
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Address  string `json:"address"`
-	ClientID string `json:"client_id"`
-	Secret   string `json:"secret"`
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Token   string `json:"token"`
 }
 
 func Has(values []string, value string) bool {
@@ -59,16 +52,30 @@ func Has(values []string, value string) bool {
 	}
 	return false
 }
+func HashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+func NewToken(id string) (string, error) {
+	if !validID.MatchString(id) {
+		return "", errors.New("invalid client ID")
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return id + "." + hex.EncodeToString(b), nil
+}
 func ValidateClient(c Client) error {
 	if !validID.MatchString(c.ID) {
-		return errors.New("client ID must contain 1-40 letters, digits, _ or -")
+		return errors.New("invalid client ID")
 	}
-	key, err := hex.DecodeString(c.Secret)
-	if err != nil || len(key) != 32 {
-		return errors.New("client secret must be 32 random bytes encoded as hex")
+	h, err := hex.DecodeString(c.TokenHash)
+	if err != nil || len(h) != 32 {
+		return errors.New("invalid token hash; create a v3 client")
 	}
-	if c.MaxNodes < 1 || c.MaxJobs < 1 {
-		return errors.New("max_nodes and max_jobs must be positive")
+	if c.MaxNodes < 1 || c.MaxNodes > 10000 || c.MaxJobs < 1 || c.MaxJobs > 100 || c.MaxSeconds < 1 || c.MaxSeconds > 3600 || c.MaxScripts < 1 || c.MaxScripts > 64 {
+		return errors.New("limits: nodes 1-10000, jobs 1-100, seconds 1-3600, scripts 1-64")
 	}
 	for _, cap := range c.Capabilities {
 		if !Has(Capabilities, cap) {
@@ -83,12 +90,12 @@ func Load(path string) (Store, error) {
 	if err != nil {
 		return s, err
 	}
-	if err = json.Unmarshal(data, &s); err != nil {
-		return s, errors.New("invalid client store JSON")
+	if json.Unmarshal(data, &s) != nil || s.Version != Protocol {
+		return s, errors.New("expected v3 client store; recreate credentials")
 	}
 	seen := map[string]bool{}
 	for _, c := range s.Clients {
-		if err = ValidateClient(c); err != nil {
+		if err := ValidateClient(c); err != nil {
 			return s, err
 		}
 		if seen[c.ID] {
@@ -99,10 +106,16 @@ func Load(path string) (Store, error) {
 	return s, nil
 }
 func Save(path string, s Store) error {
+	s.Version = Protocol
+	seen := map[string]bool{}
 	for _, c := range s.Clients {
 		if err := ValidateClient(c); err != nil {
 			return err
 		}
+		if seen[c.ID] {
+			return errors.New("duplicate client ID")
+		}
+		seen[c.ID] = true
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
@@ -112,8 +125,7 @@ func Save(path string, s Store) error {
 	if err != nil {
 		return err
 	}
-	name := f.Name()
-	defer os.Remove(name)
+	defer os.Remove(f.Name())
 	if err = f.Chmod(0600); err == nil {
 		_, err = f.Write(data)
 	}
@@ -127,26 +139,13 @@ func Save(path string, s Store) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(name, path)
-}
-func NewSecret() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-func Sign(secret string, e Envelope) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	fmt.Fprintf(mac, "speed-probe/v2\n%s\n%s\n%s\n%s", e.ClientID, strconv.FormatInt(e.Timestamp, 10), e.Nonce, e.Payload)
-	return hex.EncodeToString(mac.Sum(nil))
+	return os.Rename(f.Name(), path)
 }
 func Required(req *interfaces.SlaveRequest) ([]string, error) {
 	caps := []string{}
-	// Custom IP scripts execute code too, even without a TEST_SCRIPT matrix.
-	for _, script := range req.Configs.Scripts {
-		if script.Content != "" {
-			caps = append(caps, "script")
+	for _, s := range req.Configs.Scripts {
+		if s.Content != "" {
+			caps = append(caps, "custom_script")
 			break
 		}
 	}
@@ -172,7 +171,7 @@ func Required(req *interfaces.SlaveRequest) ([]string, error) {
 }
 func (c Client) Allows(req *interfaces.SlaveRequest) error {
 	if c.Disabled {
-		return errors.New("client is disabled")
+		return errors.New("client disabled")
 	}
 	caps, err := Required(req)
 	if err != nil {
@@ -180,78 +179,79 @@ func (c Client) Allows(req *interfaces.SlaveRequest) error {
 	}
 	for _, cap := range caps {
 		if !Has(c.Capabilities, cap) {
-			return fmt.Errorf("client is not allowed to run %s tests", cap)
+			return fmt.Errorf("capability not allowed: %s", cap)
 		}
 	}
 	if len(req.Nodes) > c.MaxNodes {
-		return errors.New("client node limit exceeded")
+		return errors.New("node limit exceeded")
+	}
+	if len(req.Configs.Scripts) > c.MaxScripts {
+		return errors.New("script limit exceeded")
 	}
 	return nil
 }
 
+// Snapshot reloads on atomic file replacement. Invalid updates fail closed.
 type Manager struct {
-	Path   string
-	mu     sync.Mutex
-	seen   map[string]int64
-	active map[string]int
+	Path    string
+	mu      sync.Mutex
+	info    os.FileInfo
+	clients map[string]Client
+	active  map[string]int
 }
 
-func NewManager(path string) *Manager {
-	return &Manager{Path: path, seen: map[string]int64{}, active: map[string]int{}}
-}
-func (m *Manager) Current(id string) (Client, error) {
-	s, err := Load(m.Path)
+func NewManager(path string) *Manager { return &Manager{Path: path, active: map[string]int{}} }
+func (m *Manager) currentLocked(id string) (Client, error) {
+	info, err := os.Stat(m.Path)
 	if err != nil {
 		return Client{}, errors.New("client store unavailable")
 	}
-	for _, c := range s.Clients {
-		if c.ID == id && !c.Disabled {
-			return c, nil
+	if m.info == nil || !os.SameFile(info, m.info) || info.ModTime() != m.info.ModTime() || info.Size() != m.info.Size() {
+		s, err := Load(m.Path)
+		if err != nil {
+			return Client{}, errors.New("client store unavailable")
 		}
+		m.clients = map[string]Client{}
+		for _, c := range s.Clients {
+			m.clients[c.ID] = c
+		}
+		m.info = info
 	}
-	return Client{}, errors.New("unknown or disabled client")
+	c, ok := m.clients[id]
+	if !ok || c.Disabled {
+		return Client{}, errors.New("unknown or disabled client")
+	}
+	c.Capabilities = append([]string{}, c.Capabilities...)
+	return c, nil
 }
-func (m *Manager) Verify(e Envelope, now time.Time) (Client, error) {
-	if e.Version != 2 || !validID.MatchString(e.ClientID) || len(e.Nonce) != 32 {
-		return Client{}, errors.New("invalid authentication envelope")
-	}
-	if _, err := hex.DecodeString(e.Nonce); err != nil {
-		return Client{}, errors.New("invalid nonce")
-	}
-	if e.Timestamp < now.Unix()-120 || e.Timestamp > now.Unix()+120 {
-		return Client{}, errors.New("request expired or clock skew exceeds 120 seconds")
-	}
-	c, err := m.Current(e.ClientID)
-	if err != nil {
-		return c, err
-	}
-	actual, err := hex.DecodeString(e.Signature)
-	expected, _ := hex.DecodeString(Sign(c.Secret, e))
-	if err != nil || !hmac.Equal(actual, expected) {
-		return Client{}, errors.New("invalid request signature")
-	}
+func (m *Manager) Current(id string) (Client, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key, expiry := range m.seen {
-		if expiry < now.Unix() {
-			delete(m.seen, key)
-		}
+	return m.currentLocked(id)
+}
+func (m *Manager) Verify(token string) (Client, error) {
+	id, secret, ok := strings.Cut(token, ".")
+	if !ok || !validID.MatchString(id) || len(secret) != 64 {
+		return Client{}, errors.New("invalid credentials")
 	}
-	key := c.ID + ":" + e.Nonce
-	if _, exists := m.seen[key]; exists {
-		return Client{}, errors.New("request already used")
+	if _, err := hex.DecodeString(secret); err != nil {
+		return Client{}, errors.New("invalid credentials")
 	}
-	if len(m.seen) >= 100000 {
-		return Client{}, errors.New("authentication capacity reached")
+	c, err := m.Current(id)
+	if err != nil || subtle.ConstantTimeCompare([]byte(c.TokenHash), []byte(HashToken(token))) != 1 {
+		return Client{}, errors.New("invalid credentials")
 	}
-	m.seen[key] = e.Timestamp + 120
 	return c, nil
 }
 func (m *Manager) Acquire(c Client) (func(), error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.active[c.ID] >= c.MaxJobs {
-		return nil, errors.New("client concurrent task limit exceeded")
+	current, err := m.currentLocked(c.ID)
+	if err != nil || current.TokenHash != c.TokenHash {
+		return nil, errors.New("credentials changed")
+	}
+	if m.active[c.ID] >= current.MaxJobs {
+		return nil, errors.New("concurrent task limit exceeded")
 	}
 	m.active[c.ID]++
 	var once sync.Once
@@ -262,8 +262,8 @@ func (m *Manager) StillAllowed(c Client, req *interfaces.SlaveRequest) error {
 	if err != nil {
 		return err
 	}
-	if !hmac.Equal([]byte(current.Secret), []byte(c.Secret)) {
-		return errors.New("client credential was rotated")
+	if current.TokenHash != c.TokenHash {
+		return errors.New("credential rotated")
 	}
 	return current.Allows(req)
 }

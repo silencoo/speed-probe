@@ -56,10 +56,11 @@ func FetchFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.Requ
 			}
 		}
 
+		target := p
 		if useHost {
-			p = nil
+			target = vendors.WithContext(vendors.Context(p), nil)
 		}
-		retBody, resp, redirs := vendors.RequestWithRetry(p, retry, timeout, &interfaces.RequestOptions{
+		retBody, resp, redirs := vendors.RequestWithRetry(target, retry, timeout, &interfaces.RequestOptions{
 			Method:  method,
 			URL:     url,
 			Headers: headers,
@@ -78,6 +79,10 @@ func FetchFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.Requ
 			retMap["headers"] = resp.Header
 			retMap["method"] = method
 			retMap["url"] = url
+			retMap["requestedUrl"] = url
+			if resp.Request != nil && resp.Request.URL != nil {
+				retMap["url"] = resp.Request.URL.String()
+			}
 			retMap["body"] = string(retBody)
 			retMap["redirects"] = redirs
 		}

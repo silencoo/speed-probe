@@ -67,6 +67,13 @@ func (c *Clash) ProxyInfo() interfaces.ProxyInfo {
 	return interfaces.ProxyInfo{
 		Name:    c.proxy.Name(),
 		Address: c.proxy.Addr(),
-		Type:    interfaces.Parse(c.proxy.Type().String()),
+		Type:    interfaces.ProxyType(c.proxy.Type().String()),
 	}
+}
+
+func (c *Clash) Close() error {
+	if c.proxy != nil {
+		return c.proxy.Close()
+	}
+	return nil
 }

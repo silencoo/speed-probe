@@ -8,8 +8,10 @@ import (
 type VendorType string
 
 const (
-	VendorLocal VendorType = "Local"
-	VendorClash VendorType = "Clash"
+	VendorLocal   VendorType = "Local"
+	VendorClash   VendorType = "Clash"
+	VendorMihomo  VendorType = "Mihomo"
+	VendorSingBox VendorType = "SingBox"
 
 	VendorInvalid VendorType = "Invalid"
 )

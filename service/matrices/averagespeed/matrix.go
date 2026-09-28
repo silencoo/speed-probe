@@ -7,6 +7,9 @@ import (
 
 type AverageSpeed struct {
 	interfaces.AverageSpeedDS
+	TotalBytes    uint64
+	ElapsedMillis int64
+	StopReason    string
 }
 
 func (m *AverageSpeed) Type() interfaces.SlaveRequestMatrixType {
@@ -20,5 +23,8 @@ func (m *AverageSpeed) MacroJob() interfaces.SlaveRequestMacroType {
 func (m *AverageSpeed) Extract(entry interfaces.SlaveRequestMatrixEntry, macro interfaces.SlaveRequestMacro) {
 	if mac, ok := macro.(*speed.Speed); ok {
 		m.Value = mac.AvgSpeed
+		m.TotalBytes = mac.TotalSize
+		m.ElapsedMillis = mac.ElapsedMillis
+		m.StopReason = mac.StopReason
 	}
 }

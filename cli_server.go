@@ -12,6 +12,7 @@ func InitConfigServer() *utils.GlobalConfig {
 	gcfg := &utils.GCFG
 
 	sflag := flag.NewFlagSet(cmdName+" server", flag.ExitOnError)
+	sflag.StringVar(&gcfg.ScriptsFile, "scripts", "", "operator-installed script catalog JSON")
 	sflag.StringVar(&gcfg.ClientsFile, "clients", "clients.json", "client credentials file")
 	sflag.StringVar(&gcfg.Binder, "bind", "", "bind a socket, can be format like 0.0.0.0:8080 or /tmp/unix_socket")
 	sflag.UintVar(&gcfg.ConnTaskTreading, "connthread", 64, "parallel threads when processing normal connectivity tasks")
@@ -46,9 +47,18 @@ func RunCliServer() {
 
 	// start api server
 	service.CleanUpServer()
-	go service.InitServer()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- service.InitServer() }()
 
-	<-utils.MakeSysChan()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			utils.DErrorf("Server: %v", err)
+			service.CleanUpServer()
+			os.Exit(1)
+		}
+	case <-utils.MakeSysChan():
+	}
 
 	// clean up
 	service.CleanUpServer()

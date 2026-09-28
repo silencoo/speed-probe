@@ -31,7 +31,7 @@ func (c *Local) DialTCP(ctx context.Context, url string, network interfaces.Requ
 	if hostname, port, err := urlToMetadata(url); err != nil {
 		return nil, err
 	} else {
-		return net.Dial(network.String(), fmt.Sprintf("%s:%d", hostname, port))
+		return (&net.Dialer{}).DialContext(ctx, network.String(), net.JoinHostPort(hostname, fmt.Sprint(port)))
 	}
 }
 

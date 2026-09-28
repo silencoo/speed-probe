@@ -55,7 +55,7 @@ func RunCliDefault() {
 
 	fmt.Printf("\n")
 	fmt.Printf("Subcommands of %s:\n", cmdName)
-	fmt.Printf("  clients\n        manage client credentials (add, list, set, revoke, rotate, export).\n")
+	fmt.Printf("  clients\n        manage client credentials (add, list, set, revoke, rotate).\n")
 	fmt.Printf("  server\n")
 	fmt.Printf("        start the speed-probe backend as a server.\n")
 	fmt.Printf("  script\n")

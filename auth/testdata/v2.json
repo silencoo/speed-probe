@@ -1,8 +1,0 @@
-{
-  "version": 2,
-  "client_id": "test",
-  "timestamp": 1700000000,
-  "nonce": "01010101010101010101010101010101",
-  "signature": "4e3709e2d7b87b97a6058037f9e36e60710099b3ddf56cd7551ef854b0269533",
-  "payload": "{\"Vendor\":\"clash\",\"Nodes\":[{\"Name\":\"测试 & <node>\",\"Payload\":\"name: 示例\"}],\"Options\":{\"Matrices\":[]}}"
-}

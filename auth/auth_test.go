@@ -1,115 +1,107 @@
 package auth
 
 import (
-	"encoding/json"
+	"github.com/silencoo/speed-probe/interfaces"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/silencoo/speed-probe/interfaces"
 )
 
-func setup(t *testing.T) (*Manager, Client, Envelope) {
+func setup(t *testing.T) (*Manager, Client, string) {
 	t.Helper()
-	c := Client{ID: "test", Secret: strings.Repeat("ab", 32), Capabilities: []string{"ping"}, MaxNodes: 2, MaxJobs: 1}
+	token := "test." + strings.Repeat("ab", 32)
+	c := Client{ID: "test", TokenHash: HashToken(token), Capabilities: []string{"ping"}, MaxNodes: 2, MaxJobs: 1, MaxSeconds: 60, MaxScripts: 2}
 	path := filepath.Join(t.TempDir(), "clients.json")
 	if err := Save(path, Store{Clients: []Client{c}}); err != nil {
 		t.Fatal(err)
 	}
-	e := Envelope{Version: 2, ClientID: c.ID, Timestamp: 1700000000, Nonce: strings.Repeat("01", 16), Payload: `{"Vendor":"clash","Nodes":[]}`}
-	e.Signature = Sign(c.Secret, e)
-	return NewManager(path), c, e
+	return NewManager(path), c, token
 }
-func TestSignatureReplayAndTamper(t *testing.T) {
-	now := time.Unix(1700000000, 0)
-	for _, name := range []string{"valid", "vendor", "signature", "expired", "future", "nonce", "unknown", "version"} {
-		t.Run(name, func(t *testing.T) {
-			m, c, e := setup(t)
-			switch name {
-			case "vendor":
-				e.Payload = strings.ReplaceAll(e.Payload, "clash", "local")
-			case "signature":
-				e.Signature = strings.Repeat("00", 32)
-			case "expired":
-				e.Timestamp -= 121
-				e.Signature = Sign(c.Secret, e)
-			case "future":
-				e.Timestamp += 121
-				e.Signature = Sign(c.Secret, e)
-			case "nonce":
-				e.Nonce = "bad"
-				e.Signature = Sign(c.Secret, e)
-			case "unknown":
-				e.ClientID = "other"
-				e.Signature = Sign(c.Secret, e)
-			case "version":
-				e.Version = 3
-			}
-			_, err := m.Verify(e, now)
-			if (err == nil) != (name == "valid") {
-				t.Fatalf("unexpected verify result: %v", err)
-			}
-			if name == "valid" {
-				if _, err = m.Verify(e, now); err == nil {
-					t.Fatal("replay accepted")
-				}
-			}
-		})
+func TestTokenAuthenticationAndHashedStorage(t *testing.T) {
+	m, c, token := setup(t)
+	if _, err := m.Verify(token); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", c.ID, token + "x", "other." + strings.Repeat("ab", 32), "test." + strings.Repeat("cd", 32)} {
+		if _, err := m.Verify(bad); err == nil {
+			t.Fatal("invalid token accepted")
+		}
+	}
+	data, _ := os.ReadFile(m.Path)
+	if strings.Contains(string(data), token) || strings.Contains(string(data), strings.Repeat("ab", 32)) {
+		t.Fatal("plaintext credential stored")
 	}
 }
-func TestConcurrentReplay(t *testing.T) {
-	m, _, e := setup(t)
+func TestPolicyReloadRotationAndFailClosed(t *testing.T) {
+	m, c, token := setup(t)
+	m.Verify(token)
+	c.Capabilities = []string{}
+	Save(m.Path, Store{Clients: []Client{c}})
+	req := &interfaces.SlaveRequest{Options: interfaces.SlaveRequestOptions{Matrices: []interfaces.SlaveRequestMatrixEntry{{Type: interfaces.MatrixHTTPPing}}}}
+	if m.StillAllowed(c, req) == nil {
+		t.Fatal("policy update ignored")
+	}
+	original := c
+	c.TokenHash = HashToken("test." + strings.Repeat("cd", 32))
+	Save(m.Path, Store{Clients: []Client{c}})
+	if m.StillAllowed(original, &interfaces.SlaveRequest{}) == nil {
+		t.Fatal("old token survived rotation")
+	}
+	c.Disabled = true
+	Save(m.Path, Store{Clients: []Client{c}})
+	if _, err := m.Current(c.ID); err == nil {
+		t.Fatal("revocation ignored")
+	}
+	os.WriteFile(m.Path, []byte("broken"), 0600)
+	if _, err := m.Current(c.ID); err == nil {
+		t.Fatal("invalid store failed open")
+	}
+}
+func TestConcurrentQuotaAndIdempotentRelease(t *testing.T) {
+	m, c, _ := setup(t)
 	var successes atomic.Int32
 	var wg sync.WaitGroup
+	releases := make(chan func(), 12)
 	for i := 0; i < 12; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := m.Verify(e, time.Unix(e.Timestamp, 0)); err == nil {
+			if release, err := m.Acquire(c); err == nil {
 				successes.Add(1)
+				releases <- release
 			}
 		}()
 	}
 	wg.Wait()
+	close(releases)
 	if successes.Load() != 1 {
-		t.Fatalf("accepted %d copies", successes.Load())
+		t.Fatalf("admitted %d tasks", successes.Load())
 	}
-}
-func TestRevocationRotationAndFailClosed(t *testing.T) {
-	m, c, e := setup(t)
-	if _, err := m.Verify(e, time.Unix(e.Timestamp, 0)); err != nil {
+	for release := range releases {
+		release()
+		release()
+	}
+	release, err := m.Acquire(c)
+	if err != nil {
 		t.Fatal(err)
 	}
-	changed := c
-	changed.Disabled = true
-	if err := Save(m.Path, Store{Clients: []Client{changed}}); err != nil {
+	release()
+}
+func TestScriptPermissionsAndLimits(t *testing.T) {
+	_, c, _ := setup(t)
+	req := &interfaces.SlaveRequest{Configs: interfaces.SlaveRequestConfigs{Scripts: []interfaces.Script{{ID: "installed", Type: interfaces.STypeMedia}}}, Options: interfaces.SlaveRequestOptions{Matrices: []interfaces.SlaveRequestMatrixEntry{{Type: interfaces.MatrixScriptTest, Params: "installed"}}}}
+	c.Capabilities = []string{"script"}
+	if err := c.Allows(req); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.StillAllowed(c, &interfaces.SlaveRequest{}); err == nil {
-		t.Fatal("revoked queued request accepted")
-	}
-	changed.Disabled = false
-	changed.Secret = strings.Repeat("cd", 32)
-	Save(m.Path, Store{Clients: []Client{changed}})
-	if err := m.StillAllowed(c, &interfaces.SlaveRequest{}); err == nil {
-		t.Fatal("old credential survived rotation")
-	}
-	os.WriteFile(m.Path, []byte("broken"), 0600)
-	if _, err := m.Current(c.ID); err == nil {
-		t.Fatal("malformed store accepted")
-	}
-}
-func TestCapabilitiesLimitsAndRelease(t *testing.T) {
-	m, c, _ := setup(t)
-	req := &interfaces.SlaveRequest{Options: interfaces.SlaveRequestOptions{Matrices: []interfaces.SlaveRequestMatrixEntry{{Type: interfaces.MatrixAverageSpeed}}}}
+	req.Configs.Scripts[0].Content = "code"
 	if c.Allows(req) == nil {
-		t.Fatal("speed capability bypass")
+		t.Fatal("script upload bypass")
 	}
-	req.Options.Matrices[0].Type = interfaces.MatrixHTTPPing
+	c.Capabilities = append(c.Capabilities, "custom_script")
 	if err := c.Allows(req); err != nil {
 		t.Fatal(err)
 	}
@@ -117,35 +109,11 @@ func TestCapabilitiesLimitsAndRelease(t *testing.T) {
 	if c.Allows(req) == nil {
 		t.Fatal("node limit bypass")
 	}
-	req.Nodes = nil
-	req.Options.Matrices = nil
-	req.Configs.Scripts = []interfaces.Script{{Type: interfaces.STypeIP, Content: "custom code"}}
-	if c.Allows(req) == nil {
-		t.Fatal("custom IP script bypass")
-	}
-	release, err := m.Acquire(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = m.Acquire(c); err == nil {
-		t.Fatal("job limit bypass")
-	}
-	release()
-	release()
-	if _, err = m.Acquire(c); err != nil {
-		t.Fatal(err)
-	}
 }
-func TestPythonWireFixture(t *testing.T) {
-	data, err := os.ReadFile("testdata/v2.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var e Envelope
-	if err = json.Unmarshal(data, &e); err != nil {
-		t.Fatal(err)
-	}
-	if Sign(strings.Repeat("ab", 32), e) != e.Signature {
-		t.Fatal("Python/Go signature mismatch")
+func TestLegacyStoreRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	os.WriteFile(path, []byte("{\"clients\":[]}"), 0600)
+	if _, err := Load(path); err == nil {
+		t.Fatal("v2 store accepted")
 	}
 }

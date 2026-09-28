@@ -1,217 +1,251 @@
 package service
 
 import (
+	"context"
+	"errors"
+	"github.com/gorilla/websocket"
 	"github.com/silencoo/speed-probe/auth"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/preconfigs"
+	"github.com/silencoo/speed-probe/service/matrices"
+	"github.com/silencoo/speed-probe/service/taskpoll"
+	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/vendors"
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
-	"github.com/silencoo/speed-probe/interfaces"
-	"github.com/silencoo/speed-probe/preconfigs"
-	"github.com/silencoo/speed-probe/utils"
-	"github.com/silencoo/speed-probe/utils/structs"
-
-	"github.com/silencoo/speed-probe/service/matrices"
-	"github.com/silencoo/speed-probe/service/taskpoll"
 )
 
-type WsHandler struct {
-	Serve func(http.ResponseWriter, *http.Request)
-}
+var upgrader = websocket.Upgrader{ReadBufferSize: 1024, WriteBufferSize: 1024, HandshakeTimeout: 10 * time.Second}
 
-func (wh *WsHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	if wh.Serve != nil {
-		wh.Serve(rw, r)
-	}
-}
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-}
-
-func InitServer() {
-	manager := auth.NewManager(utils.GCFG.ClientsFile)
-	if utils.GCFG.Binder == "" {
-		utils.DErrorf("speed-probe Server | Cannot listening the binder, bind=%s", utils.GCFG.Binder)
-		os.Exit(1)
-	}
-
-	utils.DWarnf("speed-probe Server | Start Listening, bind=%s", utils.GCFG.Binder)
-
-	wsHandler := WsHandler{
-		Serve: func(rw http.ResponseWriter, r *http.Request) {
-			conn, err := upgrader.Upgrade(rw, r, nil)
-			if err != nil {
-				utils.DErrorf("speed-probe Test | Socket establishing error, error=%s", err.Error())
-				return
-			}
-			defer conn.Close()
-			conn.SetReadLimit(16 << 20)
-			var writeMu sync.Mutex
-			writeJSON := func(v interface{}) error {
-				writeMu.Lock()
-				defer writeMu.Unlock()
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				return conn.WriteJSON(v)
-			}
-
-			var poll *taskpoll.TaskPollController
-
-			batches := structs.NewAsyncMap[string, bool]()
-			cancel := func() {
-				if poll != nil {
-					for id := range batches.ForEach() {
-						poll.Remove(id, taskpoll.TPExitInterrupt)
-					}
-				}
-			}
-
-			defer cancel()
-			for {
-				_, data, err := conn.ReadMessage()
-				if err != nil {
-					return
-				}
-				request, client, err := authenticate(data, manager)
-				if err != nil {
-					writeJSON(&interfaces.SlaveResponse{Error: err.Error()})
-					return
-				}
-				sr := *request
-				sr.Configs = *sr.Configs.Check()
-				for i := range sr.Configs.Scripts {
-					if sr.Configs.Scripts[i].TimeoutMillis == 0 {
-						sr.Configs.Scripts[i].TimeoutMillis = 10000
-					}
-					if sr.Configs.Scripts[i].TimeoutMillis > 60000 {
-						sr.Configs.Scripts[i].TimeoutMillis = 60000
-					}
-				}
-				caps := append([]string{}, client.Capabilities...)
-				if utils.GCFG.NoSpeedFlag {
-					filtered := []string{}
-					for _, c := range caps {
-						if c != "speed" {
-							filtered = append(filtered, c)
+func NewHandler(manager *auth.Manager, catalog ScriptCatalog) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		ip := net.ParseIP(host)
+		// Only trust direct TLS or a local reverse proxy, never forwarded headers.
+		if r.TLS == nil && !(ip != nil && ip.IsLoopback()) && !strings.HasPrefix(utils.GCFG.Binder, "/") {
+			http.Error(w, "TLS required", http.StatusForbidden)
+			return
+		}
+		if r.URL.Path != "/" || r.URL.RawQuery != "" {
+			http.NotFound(w, r)
+			return
+		}
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		client, err := manager.Verify(strings.TrimPrefix(header, "Bearer "))
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		conn.SetReadLimit(16 << 20)
+		write := func(e Event) error {
+			e.Protocol = auth.Protocol
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			return conn.WriteJSON(e)
+		}
+		fail := func(id, code, message string) {
+			write(Event{Type: "finished", TaskID: id, State: "failed", Error: &Failure{code, message}})
+		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		cmd, err := decodeCommand(data)
+		if err != nil {
+			fail("", "invalid_request", err.Error())
+			return
+		}
+		if cmd.Type == "describe" && cmd.Request == nil && cmd.TaskID == "" {
+			d := catalog.Describe(client)
+			write(Event{Type: "description", Description: &d})
+			return
+		}
+		if cmd.Type != "run" || cmd.Request == nil || !taskIDPattern.MatchString(cmd.TaskID) {
+			fail(cmd.TaskID, "invalid_request", "Expected run with a task_id and request")
+			return
+		}
+		req := cmd.Request
+		if len(req.Nodes) == 0 {
+			fail(cmd.TaskID, "invalid_request", "A task needs at least one node")
+			return
+		}
+		if !vendors.Supported(req.Vendor) {
+			fail(cmd.TaskID, "invalid_request", "Unknown vendor")
+			return
+		}
+		if err := client.Allows(req); err != nil {
+			fail(cmd.TaskID, "permission_denied", err.Error())
+			return
+		}
+		caps, _ := auth.Required(req)
+		if utils.GCFG.NoSpeedFlag && auth.Has(caps, "speed") {
+			fail(cmd.TaskID, "permission_denied", "Speed tests disabled")
+			return
+		}
+		// Keep the unexpanded request for authorization: installed scripts are not uploads.
+		policyRequest := req.Clone()
+		if err := catalog.Resolve(req); err != nil {
+			fail(cmd.TaskID, "invalid_request", err.Error())
+			return
+		}
+		req.Configs = *req.Configs.Check()
+		release, err := manager.Acquire(client)
+		if err != nil {
+			fail(cmd.TaskID, "capacity_exceeded", err.Error())
+			return
+		}
+		deadline, deadlineCancel := context.WithTimeout(r.Context(), time.Duration(client.MaxSeconds)*time.Second)
+		ctx, cancel := context.WithCancelCause(deadline)
+		poll := ConnTaskPoll
+		macroTypes := ExtractMacrosFromMatrices(matrices.FindBatchFromEntry(req.Options.Matrices))
+		if auth.Has(caps, "speed") {
+			poll = SpeedTaskPoll
+		}
+		// One progress event per node plus one terminal event; no socket writes in workers.
+		events := make(chan Event, len(req.Nodes)+1)
+		internalID := utils.RandomUUID()
+		item := (&TestingPollItem{id: internalID, name: cmd.TaskID, ctx: ctx, cancel: cancel, request: req, matrices: req.Options.Matrices, macros: macroTypes,
+			authorize: func() error { return manager.StillAllowed(client, policyRequest) },
+			onProcess: func(t *TestingPollItem, index int, result interfaces.SlaveEntrySlot) {
+				events <- Event{Type: "progress", TaskID: cmd.TaskID, State: "running", Record: &result, Queuing: poll.AwaitingCount()}
+			},
+			onExit: func(t *TestingPollItem, code taskpoll.TaskPollExitCode) {
+				// Workers have really stopped before returning the client's capacity.
+				release()
+				state := "succeeded"
+				var failure *Failure
+				cause := context.Cause(ctx)
+				if cause != nil {
+					state = "cancelled"
+					if errors.Is(cause, context.DeadlineExceeded) {
+						state = "failed"
+						failure = &Failure{"deadline_exceeded", "Task deadline exceeded"}
+					} else if errors.As(cause, &failure) {
+						if failure.Code != "cancelled" {
+							state = "failed"
 						}
 					}
-					caps = filtered
+				} else if code != taskpoll.TPExitSuccess {
+					state = "failed"
+					failure = &Failure{"execution_failed", "Task execution failed"}
 				}
-				if len(sr.Nodes) == 0 {
-					writeJSON(&interfaces.SlaveResponse{Version: utils.VERSION, Capabilities: caps,
-						Result: &interfaces.SlaveTask{Results: []interfaces.SlaveEntrySlot{}}})
+				results := t.results.ForEach()
+				sort.Slice(results, func(i, j int) bool { return results[i].Index < results[j].Index })
+				events <- Event{Type: "finished", TaskID: cmd.TaskID, State: state, Error: failure, Results: results}
+				deadlineCancel()
+			},
+		}).Init()
+		if err = write(Event{Type: "accepted", TaskID: cmd.TaskID, State: "queued"}); err != nil {
+			release()
+			cancel(context.Canceled)
+			deadlineCancel()
+			return
+		}
+		poll.Push(item)
+		defer func() { cancel(context.Canceled); poll.Remove(internalID, taskpoll.TPExitInterrupt); deadlineCancel() }()
+		conn.SetReadDeadline(time.Time{})
+		incoming := make(chan *Command, 1)
+		readDone := make(chan struct{})
+		defer close(readDone)
+		go func() {
+			_, data, err := conn.ReadMessage()
+			var next *Command
+			if err == nil {
+				value, decodeErr := decodeCommand(data)
+				if decodeErr == nil {
+					next = &value
+				}
+			}
+			select {
+			case incoming <- next:
+			case <-readDone:
+			}
+		}()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		heartbeats := time.NewTicker(15 * time.Second)
+		defer heartbeats.Stop()
+		done := ctx.Done()
+		for {
+			select {
+			case next := <-incoming:
+				if next == nil {
 					return
 				}
-				release, err := manager.Acquire(*client)
-				if err != nil {
-					writeJSON(&interfaces.SlaveResponse{Error: err.Error()})
-					return
-				}
-				authorize := func() error { return manager.StillAllowed(*client, &sr) }
-				submitted := false
-				defer func() {
-					if !submitted {
-						release()
-					}
-				}()
-
-				// find all matrices
-				matrices := matrices.FindBatchFromEntry(sr.Options.Matrices)
-
-				// extra macro from the matrices
-				macros := ExtractMacrosFromMatrices(matrices)
-
-				// select poll
-				if structs.Contains(macros, interfaces.MacroSpeed) {
-					if utils.GCFG.NoSpeedFlag {
-						writeJSON(&interfaces.SlaveResponse{
-							Error: "speedtest is disabled on backend",
-						})
-						return
-					}
-					poll = SpeedTaskPoll
+				if next.Type != "cancel" || next.TaskID != cmd.TaskID || next.Request != nil {
+					cancel(&Failure{"invalid_request", "Only cancel is allowed during a task"})
 				} else {
-					poll = ConnTaskPoll
+					cancel(&Failure{"cancelled", "Cancelled by client"})
 				}
-				utils.DLogf("speed-probe Test | Receive Task, name=%s poll=%s", sr.Basics.ID, poll.Name())
-
-				// build testing item
-				item := poll.Push((&TestingPollItem{
-					id:        utils.RandomUUID(),
-					name:      sr.Basics.ID,
-					request:   &sr,
-					authorize: authorize,
-					matrices:  sr.Options.Matrices,
-					macros:    macros,
-					onProcess: func(self *TestingPollItem, idx int, result interfaces.SlaveEntrySlot) {
-						writeJSON(&interfaces.SlaveResponse{
-							ID:      self.ID(),
-							Version: utils.VERSION,
-							Progress: &interfaces.SlaveProgress{
-								Record:  result,
-								Index:   idx,
-								Queuing: poll.AwaitingCount(),
-							},
-						})
-					},
-					onExit: func(self *TestingPollItem, exitCode taskpoll.TaskPollExitCode) {
-						release()
-						batches.Del(self.ID())
-						writeJSON(&interfaces.SlaveResponse{
-							ID:      self.ID(),
-							Version: utils.VERSION,
-							Result: &interfaces.SlaveTask{
-								Request: sr,
-								Results: self.results.ForEach(),
-							},
-						})
-					},
-				}).Init())
-
-				submitted = true
-				batches.Set(item.ID(), true)
-				// One task per connection. Keep reading so a disconnect cancels it.
-				conn.ReadMessage()
-				return
+				poll.Remove(internalID, taskpoll.TPExitInterrupt)
+			case <-done:
+				done = nil
+				poll.Remove(internalID, taskpoll.TPExitInterrupt)
+			case <-ticker.C:
+				if ctx.Err() == nil {
+					if err := manager.StillAllowed(client, policyRequest); err != nil {
+						cancel(&Failure{"permission_revoked", "Client authorization changed"})
+						poll.Remove(internalID, taskpoll.TPExitError)
+					}
+				}
+			case <-heartbeats.C:
+				if err := write(Event{Type: "heartbeat", TaskID: cmd.TaskID}); err != nil {
+					return
+				}
+			case event := <-events:
+				if err := write(event); err != nil {
+					return
+				}
+				if event.Type == "finished" {
+					return
+				}
 			}
-		},
-	}
-
-	server := http.Server{Handler: &wsHandler}
-
-	if strings.HasPrefix(utils.GCFG.Binder, "/") {
-		unixListener, err := net.Listen("unix", utils.GCFG.Binder)
-		if err != nil {
-			utils.DErrorf("speed-probe Launch | Cannot listen on unixsocket %s, error=%s", utils.GCFG.Binder, err.Error())
-			os.Exit(1)
 		}
-		server.Serve(unixListener)
-	} else {
-		netListener, err := net.Listen("tcp", utils.GCFG.Binder)
-		if err != nil {
-			utils.DErrorf("speed-probe Launch | Cannot listen on socket %s, error=%s", utils.GCFG.Binder, err.Error())
-			os.Exit(1)
-		}
-		if utils.GCFG.TLS {
-			tlsConfig, err := preconfigs.MakeTLSServer(utils.GCFG.TLSCertFile, utils.GCFG.TLSKeyFile)
-			if err != nil {
-				utils.DErrorf("speed-probe Launch | Cannot configure TLS, error=%s", err.Error())
-				os.Exit(1)
-			}
-			server.TLSConfig = tlsConfig
-			server.ServeTLS(netListener, "", "")
-		} else {
-			server.Serve(netListener)
-		}
-
-	}
+	})
 }
-
+func InitServer() error {
+	catalog, err := LoadScripts(utils.GCFG.ScriptsFile)
+	if err != nil {
+		return err
+	}
+	server := http.Server{Handler: NewHandler(auth.NewManager(utils.GCFG.ClientsFile), catalog), ReadHeaderTimeout: 10 * time.Second}
+	network := "tcp"
+	if strings.HasPrefix(utils.GCFG.Binder, "/") {
+		network = "unix"
+	}
+	listener, err := net.Listen(network, utils.GCFG.Binder)
+	if err != nil {
+		return err
+	}
+	if utils.GCFG.TLS {
+		cfg, err := preconfigs.MakeTLSServer(utils.GCFG.TLSCertFile, utils.GCFG.TLSKeyFile)
+		if err != nil {
+			listener.Close()
+			return err
+		}
+		server.TLSConfig = cfg
+		err = server.ServeTLS(listener, "", "")
+	} else {
+		err = server.Serve(listener)
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
 func CleanUpServer() {
 	if strings.HasPrefix(utils.GCFG.Binder, "/") {
 		os.Remove(utils.GCFG.Binder)

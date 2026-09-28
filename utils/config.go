@@ -1,6 +1,7 @@
 package utils
 
 type GlobalConfig struct {
+	ScriptsFile      string
 	ClientsFile      string
 	Binder           string
 	SpeedLimit       uint64

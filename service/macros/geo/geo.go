@@ -6,11 +6,12 @@ import (
 
 	"github.com/silencoo/speed-probe/interfaces"
 	"github.com/silencoo/speed-probe/utils"
+	"github.com/silencoo/speed-probe/vendors"
 )
 
 func RemoteLookup(p interfaces.Vendor, script string, retry int) *interfaces.IPStacks {
 	ret := &interfaces.IPStacks{}
-	for i := 0; i < retry && ret.Count() == 0; i++ {
+	for i := 0; i < retry && ret.Count() == 0 && vendors.Context(p).Err() == nil; i++ {
 		ret = ExecIpCheck(p, script, interfaces.ROptionsTCP)
 	}
 	return ret
@@ -51,19 +52,16 @@ func DetectingSource(p interfaces.Vendor, script string, retry int, queryServers
 
 	if mode == DSMInOnly || mode == DSMDefault {
 		inIP := p.ProxyInfo().Address
-		if strings.Count(inIP, ":") > 1 {
-			// ipv6
-			inIP = p.ProxyInfo().Address
-		} else {
-			// domain
-			inIP = strings.Split(p.ProxyInfo().Address, ":")[0]
+		if host, _, err := net.SplitHostPort(inIP); err == nil {
+			inIP = host
 		}
+		inIP = strings.Trim(inIP, "[]")
 
 		domain := inIP
 		ipv4 := []string{}
 		ipv6 := []string{}
 		if net.ParseIP(inIP) == nil {
-			ipstacks := utils.LookupIPv46(inIP, retry, queryServers)
+			ipstacks := utils.LookupIPv46Context(vendors.Context(p), inIP, retry, queryServers)
 			ipv4 = ipstacks.IPv4
 			ipv6 = ipstacks.IPv6
 		} else {
@@ -82,10 +80,10 @@ func DetectingSource(p interfaces.Vendor, script string, retry int, queryServers
 		}
 
 		for _, ip := range ipv4 {
-			in.IPv4Stack = append(in.IPv4Stack, RunGeoCheck(nil, script, ip, retry, "tcp"))
+			in.IPv4Stack = append(in.IPv4Stack, RunGeoCheck(vendors.WithContext(vendors.Context(p), nil), script, ip, retry, "tcp"))
 		}
 		for _, ip := range ipv6 {
-			in.IPv6Stack = append(in.IPv6Stack, RunGeoCheck(nil, script, ip, retry, "tcp"))
+			in.IPv6Stack = append(in.IPv6Stack, RunGeoCheck(vendors.WithContext(vendors.Context(p), nil), script, ip, retry, "tcp"))
 		}
 
 		if in.Count() > 0 {

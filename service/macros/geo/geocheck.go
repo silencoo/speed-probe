@@ -8,6 +8,7 @@ import (
 	"github.com/silencoo/speed-probe/utils/structs"
 	"github.com/silencoo/speed-probe/utils/structs/memutils"
 	"github.com/silencoo/speed-probe/utils/structs/obliviousmap"
+	"github.com/silencoo/speed-probe/vendors"
 )
 
 var GeoCache *obliviousmap.ObliviousMap[*interfaces.GeoInfo]
@@ -20,7 +21,7 @@ func RunGeoCheck(p interfaces.Vendor, script string, ip string, retry int, netwo
 
 	// use mmdb first, if cannot get record, try remote query 3 times
 	if ret = RunMMDBCheck(ip); ret == nil {
-		for i := 0; i < structs.WithIn(retry, 1, 3) && (ret == nil || ret.IP != ""); i++ {
+		for i := 0; i < structs.WithIn(retry, 1, 3) && vendors.Context(p).Err() == nil && (ret == nil || ret.IP == ""); i++ {
 			ret = ExecGeoCheck(p, script, ip, network)
 		}
 	}

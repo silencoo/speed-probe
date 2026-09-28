@@ -4,11 +4,15 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/metacubex/mihomo/constant"
 )
 
 func urlToMetadata(rawURL string, network constant.NetWork) (addr constant.Metadata, err error) {
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "tcp://" + rawURL
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return

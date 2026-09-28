@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"time"
@@ -61,12 +60,12 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 	}
 
 	if p != nil {
-		transport.Dial = func(string, string) (net.Conn, error) {
-			return p.DialTCP(ctx, reqOpt.URL, reqOpt.Network)
+		transport.DialContext = func(dialCtx context.Context, network, address string) (net.Conn, error) {
+			return p.DialTCP(dialCtx, address, reqOpt.Network)
 		}
 	} else {
-		transport.Dial = func(string, string) (net.Conn, error) {
-			return net.Dial(reqOpt.Network.String(), reqOpt.URL)
+		transport.DialContext = func(dialCtx context.Context, network, address string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(dialCtx, network, address)
 		}
 	}
 
@@ -89,11 +88,20 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 	// send the request
 	resp, err := client.Do(req)
 	if err != nil {
+		transport.CloseIdleConnections()
 		return nil, nil, err
 	}
+	resp.Body = &responseBody{ReadCloser: resp.Body, cleanup: transport.CloseIdleConnections}
 
 	return resp, redirects, nil
 }
+
+type responseBody struct {
+	io.ReadCloser
+	cleanup func()
+}
+
+func (b *responseBody) Close() error { err := b.ReadCloser.Close(); b.cleanup(); return err }
 
 func Request(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.RequestOptions) (duration uint16, bodyBytes []byte, resp *http.Response, redirects []string) {
 	var err error
@@ -105,8 +113,9 @@ func Request(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.Reques
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
+	bodyBytes, err = io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	if err != nil || len(bodyBytes) > 8<<20 {
+		bodyBytes, resp = nil, nil
 		return
 	}
 
@@ -119,8 +128,8 @@ func RequestWithRetry(p interfaces.Vendor, retry int, timeoutMillisecond int64, 
 	var retBody []byte = nil
 	var redirects = []string{}
 
-	for i := 0; resp == nil && i < structs.WithIn(retry, 1, 10); i += 1 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMillisecond)*time.Millisecond)
+	for i := 0; resp == nil && i < structs.WithIn(retry, 1, 10) && Context(p).Err() == nil; i += 1 {
+		ctx, cancel := context.WithTimeout(Context(p), time.Duration(timeoutMillisecond)*time.Millisecond)
 		_, retBody, resp, redirects = Request(ctx, p, reqOpt)
 		cancel()
 	}
@@ -136,7 +145,7 @@ func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, 
 			conn, err = p.DialTCP(ctx, addr, network)
 		}
 	} else {
-		conn, err = net.Dial(network.String(), addr)
+		conn, err = (&net.Dialer{}).DialContext(ctx, network.String(), addr)
 	}
 
 	if err != nil {
@@ -144,6 +153,8 @@ func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, 
 	}
 
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	if _, err := conn.Write(data); err != nil {
 		return nil, err
 	}
@@ -160,8 +171,8 @@ func NetCatWithRetry(p interfaces.Vendor, retry int, timeoutMillisecond int64, a
 	var retBody []byte = nil
 	var err = fmt.Errorf("request not send")
 
-	for i := 0; err != nil && i < structs.WithIn(retry, 1, 10); i += 1 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMillisecond)*time.Millisecond)
+	for i := 0; err != nil && i < structs.WithIn(retry, 1, 10) && Context(p).Err() == nil; i += 1 {
+		ctx, cancel := context.WithTimeout(Context(p), time.Duration(timeoutMillisecond)*time.Millisecond)
 		retBody, err = NetCat(ctx, p, addr, data, network)
 		cancel()
 	}

@@ -1,6 +1,8 @@
 package interfaces
 
 type SlaveEntrySlot struct {
+	Error          string `json:"error,omitempty"`
+	Index          int    `json:"index"`
 	Grouping       string
 	ProxyInfo      ProxyInfo
 	InvokeDuration int64
@@ -12,25 +14,4 @@ func (ses *SlaveEntrySlot) Get(idx int) *MatrixResponse {
 		return &ses.Matrices[idx]
 	}
 	return nil
-}
-
-type SlaveTask struct {
-	Request SlaveRequest
-	Results []SlaveEntrySlot
-}
-
-type SlaveProgress struct {
-	Index   int
-	Record  SlaveEntrySlot
-	Queuing int
-}
-
-type SlaveResponse struct {
-	Capabilities []string
-	ID           string
-	Version      string
-
-	Error    string
-	Result   *SlaveTask
-	Progress *SlaveProgress
 }

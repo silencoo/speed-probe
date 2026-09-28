@@ -1,8 +1,11 @@
 package geo
 
 import (
+	"context"
+	"github.com/silencoo/speed-probe/vendors"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/silencoo/speed-probe/engine"
 	"github.com/silencoo/speed-probe/engine/helpers"
@@ -12,8 +15,15 @@ import (
 func ExecIpCheck(p interfaces.Vendor, script string, network interfaces.RequestOptionsNetwork) (ipstacks *interfaces.IPStacks) {
 	ipstacks = (&interfaces.IPStacks{}).Init()
 
+	ctx, cancel := context.WithTimeout(vendors.Context(p), 30*time.Second)
+	defer cancel()
+	p = vendors.WithContext(ctx, p)
 	vm := engine.VMNewWithVendor(p, network)
-	vm.RunString(engine.PREDEFINED_SCRIPT + engine.DEFAULT_IP_SCRIPT + script)
+	stop := context.AfterFunc(ctx, func() { vm.Interrupt("geo script cancelled") })
+	defer stop()
+	if _, err := vm.RunString(engine.PREDEFINED_SCRIPT + engine.DEFAULT_IP_SCRIPT + script); err != nil {
+		return
+	}
 	caller := "ip_resolve_default"
 	if engine.HasFunction(vm, "ip_resolve") {
 		caller = "ip_resolve"
@@ -40,11 +50,18 @@ func ExecIpCheck(p interfaces.Vendor, script string, network interfaces.RequestO
 }
 
 func ExecGeoCheck(p interfaces.Vendor, script string, ip string, network interfaces.RequestOptionsNetwork) *interfaces.GeoInfo {
+	ctx, cancel := context.WithTimeout(vendors.Context(p), 30*time.Second)
+	defer cancel()
+	p = vendors.WithContext(ctx, p)
 	vm := engine.VMNewWithVendor(p, network)
+	stop := context.AfterFunc(ctx, func() { vm.Interrupt("geo script cancelled") })
+	defer stop()
 	if script == "" {
 		script = engine.DEFAULT_GEOIP_SCRIPT
 	}
-	vm.RunString(engine.PREDEFINED_SCRIPT + script)
+	if _, err := vm.RunString(engine.PREDEFINED_SCRIPT + script); err != nil {
+		return nil
+	}
 
 	ret, err := engine.ExecTaskCallback(vm, "handler", ip)
 	if engine.ThrowExecTaskErr("GeoCheck", err) {

@@ -1,7 +1,7 @@
 package script
 
 import (
-	"context"
+	"github.com/silencoo/speed-probe/vendors"
 	"os"
 	"strconv"
 	"sync"
@@ -32,11 +32,13 @@ func (m *Script) Run(proxy interfaces.Vendor, r *interfaces.SlaveRequest) error 
 	for i := range execScripts {
 		script := &execScripts[i]
 		go func() {
-			scriptControl.Acquire(context.Background(), 1)
+			defer wg.Done()
+			if err := scriptControl.Acquire(vendors.Context(proxy), 1); err != nil {
+				return
+			}
 			defer scriptControl.Release(1)
 
 			store.Set(script.ID, ExecScript(proxy, script))
-			wg.Done()
 		}()
 	}
 	wg.Wait()

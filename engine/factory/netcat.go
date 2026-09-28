@@ -29,11 +29,12 @@ func NetCatFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.Req
 			}
 		}
 
+		target := p
 		if useHost {
-			p = nil
+			target = vendors.WithContext(vendors.Context(p), nil)
 		}
 
-		returns, err := vendors.NetCatWithRetry(p, retry, timeout, addr, []byte(data), network)
+		returns, err := vendors.NetCatWithRetry(target, retry, timeout, addr, []byte(data), network)
 
 		retMap := map[string]string{
 			"error": "",

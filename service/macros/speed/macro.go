@@ -3,10 +3,12 @@ package speed
 import "github.com/silencoo/speed-probe/interfaces"
 
 type Speed struct {
-	AvgSpeed  uint64
-	MaxSpeed  uint64
-	TotalSize uint64
-	Speeds    []uint64
+	AvgSpeed      uint64
+	MaxSpeed      uint64
+	TotalSize     uint64
+	Speeds        []uint64
+	ElapsedMillis int64
+	StopReason    string
 }
 
 func (m *Speed) Type() interfaces.SlaveRequestMacroType {

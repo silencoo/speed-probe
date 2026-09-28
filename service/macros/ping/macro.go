@@ -5,9 +5,15 @@ import (
 )
 
 type Ping struct {
-	RTT     uint16
-	Request uint16
-	RTTStd  uint16
+	RTT        uint16
+	Request    uint16
+	RTTStd     uint16
+	RTTMax     uint16
+	RequestStd uint16
+	RequestMax uint16
+	Attempts   int
+	Failures   int
+	HTTPCode   int
 }
 
 func (m *Ping) Type() interfaces.SlaveRequestMacroType {
@@ -15,6 +21,6 @@ func (m *Ping) Type() interfaces.SlaveRequestMacroType {
 }
 
 func (m *Ping) Run(proxy interfaces.Vendor, r *interfaces.SlaveRequest) error {
-	m.RTT, m.Request, m.RTTStd = ping(proxy, r.Configs.PingAddress, r.Configs.PingAverageOver, int(r.Configs.TaskRetry), r.Configs.TaskTimeout)
+	measure(m, proxy, r.Configs)
 	return nil
 }

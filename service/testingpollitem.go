@@ -1,119 +1,115 @@
 package service
 
 import (
-	"sync"
-	"time"
-
+	"context"
 	"github.com/silencoo/speed-probe/interfaces"
 	"github.com/silencoo/speed-probe/service/macros"
-	"github.com/silencoo/speed-probe/service/macros/invalid"
 	"github.com/silencoo/speed-probe/service/matrices"
 	"github.com/silencoo/speed-probe/service/taskpoll"
 	"github.com/silencoo/speed-probe/utils"
 	"github.com/silencoo/speed-probe/utils/structs"
 	"github.com/silencoo/speed-probe/vendors"
+	"sync"
+	"time"
 )
 
 type TestingPollItem struct {
-	id   string
-	name string
-
-	request  *interfaces.SlaveRequest
-	matrices []interfaces.SlaveRequestMatrixEntry
-	macros   []interfaces.SlaveRequestMacroType
-	results  *structs.AsyncArr[interfaces.SlaveEntrySlot]
-
-	onProcess func(self *TestingPollItem, idx int, result interfaces.SlaveEntrySlot)
-	onExit    func(self *TestingPollItem, exitCode taskpoll.TaskPollExitCode)
-
-	onProcessLock sync.Mutex
-	exitOnce      sync.Once
-	authorize     func() error
+	id        string
+	name      string
+	ctx       context.Context
+	cancel    context.CancelCauseFunc
+	request   *interfaces.SlaveRequest
+	matrices  []interfaces.SlaveRequestMatrixEntry
+	macros    []interfaces.SlaveRequestMacroType
+	results   *structs.AsyncArr[interfaces.SlaveEntrySlot]
+	onProcess func(*TestingPollItem, int, interfaces.SlaveEntrySlot)
+	onExit    func(*TestingPollItem, taskpoll.TaskPollExitCode)
+	exitOnce  sync.Once
+	authorize func() error
 }
 
-func (tpi *TestingPollItem) ID() string {
-	return tpi.id
-}
-
-func (tpi *TestingPollItem) TaskName() string {
-	return tpi.name
-}
-
-func (tpi *TestingPollItem) Weight() uint {
-	// TODO: could arrange weight based on task size
-	// or customized rules
-
-	return 1
-}
-
-func (tpi *TestingPollItem) Count() int {
-	return len(tpi.request.Nodes)
-}
-
-func (tpi *TestingPollItem) Yield(idx int, tpc *taskpoll.TaskPollController) {
-	result := interfaces.SlaveEntrySlot{
-		ProxyInfo:      interfaces.ProxyInfo{},
-		InvokeDuration: -1,
-		Matrices:       []interfaces.MatrixResponse{},
-	}
-
-	defer func() {
-		utils.WrapErrorPure("Task yield error", recover())
-
-		tpi.results.Push(result)
-
-		tpi.onProcessLock.Lock()
-		defer tpi.onProcessLock.Unlock()
-		tpi.onProcess(tpi, idx, result)
-	}()
-
-	// Recheck queued work after a client is revoked or its key is rotated.
-	if tpi.authorize != nil && tpi.authorize() != nil {
+func (t *TestingPollItem) ID() string       { return t.id }
+func (t *TestingPollItem) TaskName() string { return t.name }
+func (t *TestingPollItem) Weight() uint     { return 1 }
+func (t *TestingPollItem) Count() int       { return len(t.request.Nodes) }
+func (t *TestingPollItem) Yield(idx int, p *taskpoll.TaskPollController) {
+	if t.ctx.Err() != nil {
 		return
 	}
-	node := tpi.request.Nodes[idx]
-	vendor := vendors.Find(tpi.request.Vendor).Build(node.Name, node.Payload)
-	result.ProxyInfo = vendor.ProxyInfo()
+	if t.authorize != nil {
+		if err := t.authorize(); err != nil {
+			t.cancel(&Failure{"permission_revoked", "Client authorization changed"})
+			p.Remove(t.id, taskpoll.TPExitError)
+			return
+		}
+	}
+	node := t.request.Nodes[idx]
+	result := interfaces.SlaveEntrySlot{Index: idx, ProxyInfo: interfaces.ProxyInfo{Name: node.Name}, InvokeDuration: -1, Matrices: []interfaces.MatrixResponse{}}
+	defer func() {
+		if recover() != nil {
+			t.cancel(&Failure{"execution_failed", "Node execution failed"})
+			p.Remove(t.id, taskpoll.TPExitError)
+			return
+		}
+		if t.ctx.Err() != nil {
+			return
+		}
+		t.results.Push(result)
+		t.onProcess(t, idx, result)
+	}()
+	base := vendors.Build(t.ctx, t.request.Vendor, node.Name, node.Payload)
+	if closer, ok := base.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
+	if base.Status() != interfaces.VStatusOperational {
+		result.Error = "Node configuration is invalid or unsupported by the selected core"
+		return
+	}
+	proxy := vendors.WithContext(t.ctx, base)
+	result.ProxyInfo = proxy.ProxyInfo()
 	macroMap := structs.NewAsyncMap[interfaces.SlaveRequestMacroType, interfaces.SlaveRequestMacro]()
-
-	startTime := time.Now().UnixMilli()
-	wg := sync.WaitGroup{}
-	wg.Add(len(tpi.macros))
-	for _, macro := range tpi.macros {
-		macroName := macro
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, kind := range t.macros {
+		kind := kind
+		wg.Add(1)
 		go func() {
-			macro := macros.Find(macroName)
-			macro.Run(vendor, tpi.request)
-			macroMap.Set(macroName, macro)
-			wg.Done()
+			defer wg.Done()
+			defer func() {
+				if recover() != nil {
+					t.cancel(&Failure{"execution_failed", "Test execution failed"})
+				}
+			}()
+			if t.ctx.Err() != nil {
+				return
+			}
+			m := macros.Find(kind)
+			if err := m.Run(proxy, t.request); err != nil {
+				t.cancel(&Failure{"execution_failed", "Test execution failed"})
+				return
+			}
+			macroMap.Set(kind, m)
 		}()
 	}
 	wg.Wait()
-	endTime := time.Now().UnixMilli()
-	result.InvokeDuration = endTime - startTime
-
-	result.Matrices = structs.Map(tpi.matrices, func(me interfaces.SlaveRequestMatrixEntry) interfaces.MatrixResponse {
-		m := matrices.Find(me.Type)
+	if t.ctx.Err() != nil {
+		return
+	}
+	result.InvokeDuration = time.Since(start).Milliseconds()
+	for _, entry := range t.matrices {
+		m := matrices.Find(entry.Type)
 		macro := macroMap.MustGet(m.MacroJob())
 		if macro == nil {
-			macro = &invalid.Invalid{}
+			continue
 		}
-		m.Extract(me, macro)
-
-		return interfaces.MatrixResponse{
-			Type:    m.Type(),
-			Payload: utils.ToJSON(m),
-		}
-	})
+		m.Extract(entry, macro)
+		result.Matrices = append(result.Matrices, interfaces.MatrixResponse{Type: m.Type(), Payload: utils.ToJSON(m)})
+	}
 }
-
-func (tpi *TestingPollItem) OnExit(exitCode taskpoll.TaskPollExitCode) {
-	tpi.exitOnce.Do(func() {
-		tpi.onExit(tpi, exitCode)
-	})
+func (t *TestingPollItem) OnExit(code taskpoll.TaskPollExitCode) {
+	t.exitOnce.Do(func() { t.onExit(t, code) })
 }
-
-func (tpi *TestingPollItem) Init() taskpoll.TaskPollItem {
-	tpi.results = structs.NewAsyncArr[interfaces.SlaveEntrySlot]()
-	return tpi
+func (t *TestingPollItem) Init() taskpoll.TaskPollItem {
+	t.results = structs.NewAsyncArr[interfaces.SlaveEntrySlot]()
+	return t
 }

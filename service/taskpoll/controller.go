@@ -1,12 +1,10 @@
 package taskpoll
 
 import (
-	"math/rand"
+	"context"
+	"github.com/silencoo/speed-probe/utils"
 	"sync"
 	"time"
-
-	"github.com/silencoo/speed-probe/utils"
-	"github.com/silencoo/speed-probe/utils/structs"
 )
 
 type TaskPollExitCode uint
@@ -20,182 +18,171 @@ const (
 type taskPollItemWrapper struct {
 	TaskPollItem
 	counter  int
+	running  int
 	exitCode TaskPollExitCode
-
 	exitOnce sync.Once
 }
 
-func (tpw *taskPollItemWrapper) OnExit(exitCode TaskPollExitCode) {
-	tpw.exitOnce.Do(func() {
-		tpw.TaskPollItem.OnExit(exitCode)
-	})
+func (w *taskPollItemWrapper) OnExit(code TaskPollExitCode) {
+	w.exitOnce.Do(func() { w.TaskPollItem.OnExit(code) })
 }
 
 type TaskPollController struct {
 	name        string
 	concurrency uint
 	interval    time.Duration
-	emptyWait   time.Duration
-
 	taskPoll    []*taskPollItemWrapper
-	runningTask map[string]int
-
-	current  uint
-	pollLock sync.Mutex
+	active      map[string]*taskPollItemWrapper
+	current     uint
+	pollLock    sync.Mutex
+	wake        chan struct{}
 }
 
-func (tpc *TaskPollController) Name() string {
-	return tpc.name
+func (p *TaskPollController) Name() string { return p.name }
+func (p *TaskPollController) signal() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
 }
-
-// single thread
-func (tpc *TaskPollController) populate() (int, *taskPollItemWrapper) {
-	tpc.pollLock.Lock()
-	defer tpc.pollLock.Unlock()
-
-	if tpc.current >= tpc.concurrency {
+func (p *TaskPollController) populate() (int, *taskPollItemWrapper) {
+	p.pollLock.Lock()
+	defer p.pollLock.Unlock()
+	if p.current >= p.concurrency || len(p.taskPoll) == 0 {
 		return 0, nil
 	}
-
-	totalWeight := uint(0)
-	totalCount := 0
-	for _, tp := range tpc.taskPoll {
-		totalWeight += tp.Weight()
-		totalCount += tp.Count()
+	w := p.taskPoll[0]
+	p.taskPoll = p.taskPoll[1:]
+	index := w.counter
+	w.counter++
+	w.running++
+	p.current++
+	// Round robin gives each admitted task a turn without random starvation.
+	if w.counter < w.Count() {
+		p.taskPoll = append(p.taskPoll, w)
 	}
-
-	factor := 0
-	if totalWeight > 0 {
-		factor = rand.Intn(int(totalWeight))
-	}
-
-	for _, tp := range tpc.taskPoll {
-		factor -= int(tp.Weight())
-		if factor < 0 {
-			counter := tp.counter
-
-			tp.counter += 1
-			if tp.counter >= tp.Count() {
-				tpc.remove_unsafe(tp.ID(), TPExitSuccess)
-			}
-
-			tpc.current += 1
-			tpc.runningTask[tp.ID()] += 1
-			return counter, tp
-		}
-	}
-
-	// no task left
-	time.Sleep(tpc.emptyWait)
-
-	return 0, nil
+	return index, w
 }
-
-func (tpc *TaskPollController) release(tpw *taskPollItemWrapper) {
-	tpc.pollLock.Lock()
-	defer tpc.pollLock.Unlock()
-
-	tpc.runningTask[tpw.ID()] -= 1
-	inWaitList := structs.MapContains(tpc.taskPoll, func(w *taskPollItemWrapper) string {
-		return w.ID()
-	}, tpw.ID())
-
-	if !inWaitList && tpc.runningTask[tpw.ID()] == 0 {
-		delete(tpc.runningTask, tpw.ID())
-		tpw.OnExit(tpw.exitCode)
+func (p *TaskPollController) release(w *taskPollItemWrapper) {
+	p.pollLock.Lock()
+	w.running--
+	p.current--
+	finished := w.running == 0 && w.counter >= w.Count()
+	if finished {
+		delete(p.active, w.ID())
 	}
-
-	if tpc.current > 0 {
-		tpc.current -= 1
+	code := w.exitCode
+	p.pollLock.Unlock()
+	p.signal()
+	// Never invoke callbacks (including network I/O) under the scheduler lock.
+	if finished {
+		w.OnExit(code)
 	}
 }
-
-func (tpc *TaskPollController) AwaitingCount() int {
-	tpc.pollLock.Lock()
-	defer tpc.pollLock.Unlock()
-
-	totalCount := 0
-	for _, tp := range tpc.taskPoll {
-		totalCount += (tp.Count() - tp.counter)
+func (p *TaskPollController) AwaitingCount() int {
+	p.pollLock.Lock()
+	defer p.pollLock.Unlock()
+	n := 0
+	for _, w := range p.taskPoll {
+		n += w.Count() - w.counter
 	}
-	return totalCount
+	return n
 }
-
-func (tpc *TaskPollController) Start() {
-	sigTerm := utils.MakeSysChan()
-
-	for {
+func (p *TaskPollController) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
 		select {
-		case <-sigTerm:
-			utils.DLog("task server shutted down.")
+		case <-utils.MakeSysChan():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	p.Run(ctx)
+}
+func (p *TaskPollController) Run(ctx context.Context) {
+	for {
+		if ctx.Err() != nil {
 			return
-		default:
-			if itemIdx, tpw := tpc.populate(); tpw != nil {
-				utils.DLogf("Task Poll | Task Populate, poll=%s type=%s id=%s index=%v", tpc.name, tpw.TaskName(), tpw.ID(), itemIdx)
-				go func() {
-					defer func() {
-						utils.WrapErrorPure("Task population err", recover())
-						tpc.release(tpw)
-					}()
-					tpw.Yield(itemIdx, tpc)
-				}()
-				if tpc.interval > 0 {
-					time.Sleep(tpc.interval)
+		}
+		index, w := p.populate()
+		if w == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-p.wake:
+			}
+			continue
+		}
+		go func() {
+			defer func() {
+				if recover() != nil {
+					p.Remove(w.ID(), TPExitError)
 				}
-			} else {
-				// extra sleep for over-populated punishment
-				time.Sleep(40 * time.Millisecond)
+				p.release(w)
+			}()
+			w.Yield(index, p)
+		}()
+		if p.interval > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(p.interval):
 			}
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-func (tpc *TaskPollController) Push(item TaskPollItem) TaskPollItem {
-	tpc.pollLock.Lock()
-	defer tpc.pollLock.Unlock()
-
-	tpc.taskPoll = append(tpc.taskPoll, &taskPollItemWrapper{
-		TaskPollItem: item,
-	})
-
+func (p *TaskPollController) Push(item TaskPollItem) TaskPollItem {
+	w := &taskPollItemWrapper{TaskPollItem: item}
+	p.pollLock.Lock()
+	if _, exists := p.active[item.ID()]; exists {
+		p.pollLock.Unlock()
+		panic("duplicate task ID")
+	}
+	if item.Count() > 0 {
+		p.taskPoll = append(p.taskPoll, w)
+		p.active[item.ID()] = w
+	}
+	p.pollLock.Unlock()
+	p.signal()
+	if item.Count() == 0 {
+		w.OnExit(TPExitSuccess)
+	}
 	return item
 }
-
-func (tpc *TaskPollController) remove_unsafe(id string, exitCode TaskPollExitCode) {
-	var tp *taskPollItemWrapper = nil
-	tpc.taskPoll = structs.Filter(tpc.taskPoll, func(w *taskPollItemWrapper) bool {
-		if w.ID() == id {
-			tp = w
-			return false
-		}
-		return true
-	})
-
-	if tp != nil && exitCode != TPExitSuccess {
-		utils.DWarnf("Task Poll | Task interrupted, id=%v reason=%v", id, exitCode)
-		tp.exitCode = exitCode
-		// Running nodes still own their client slot until their work finishes.
-		if tpc.runningTask[id] == 0 {
-			tp.OnExit(exitCode)
+func (p *TaskPollController) Remove(id string, code TaskPollExitCode) {
+	p.pollLock.Lock()
+	w := p.active[id]
+	if w == nil {
+		p.pollLock.Unlock()
+		return
+	}
+	w.exitCode = code
+	w.counter = w.Count()
+	kept := p.taskPoll[:0]
+	for _, other := range p.taskPoll {
+		if other != w {
+			kept = append(kept, other)
 		}
 	}
-}
-
-func (tpc *TaskPollController) Remove(id string, exitCode TaskPollExitCode) {
-	tpc.pollLock.Lock()
-	defer tpc.pollLock.Unlock()
-
-	tpc.remove_unsafe(id, exitCode)
-}
-
-func NewTaskPollController(name string, concurrency uint, interval time.Duration, emptyWait time.Duration) *TaskPollController {
-	return &TaskPollController{
-		name:        name,
-		concurrency: structs.WithInDefault(concurrency, 1, 64, 16),
-		interval:    interval,
-		emptyWait:   emptyWait,
-
-		runningTask: make(map[string]int),
+	p.taskPoll = kept
+	finished := w.running == 0
+	if finished {
+		delete(p.active, id)
 	}
+	p.pollLock.Unlock()
+	p.signal()
+	if finished {
+		w.OnExit(code)
+	}
+}
+func NewTaskPollController(name string, concurrency uint, interval, emptyWait time.Duration) *TaskPollController {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > 64 {
+		concurrency = 64
+	}
+	return &TaskPollController{name: name, concurrency: concurrency, interval: interval, active: map[string]*taskPollItemWrapper{}, wake: make(chan struct{}, 1)}
 }

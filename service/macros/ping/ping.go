@@ -1,167 +1,93 @@
 package ping
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
-	"fmt"
+	"github.com/silencoo/speed-probe/interfaces"
+	"github.com/silencoo/speed-probe/vendors"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	urllib "net/url"
-	"strings"
+	"sync/atomic"
 	"time"
-
-	"github.com/silencoo/speed-probe/interfaces"
-	"github.com/silencoo/speed-probe/preconfigs"
-	"github.com/silencoo/speed-probe/utils"
-	"github.com/silencoo/speed-probe/utils/structs"
 )
 
-func pingViaTrace(ctx context.Context, p interfaces.Vendor, url string) (uint16, uint16, error) {
-	transport := &http.Transport{
-		Dial: func(string, string) (net.Conn, error) {
-			return p.DialTCP(ctx, url, interfaces.ROptionsTCP)
-		},
-		// from http.DefaultTransport
-		MaxIdleConns:          100,
-		IdleConnTimeout:       3 * time.Second,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,
-			// for version prior to tls1.3, the handshake will take 2-RTTs,
-			// plus, majority server supports tls1.3, so we set a limit here
-			MinVersion: tls.VersionTLS13,
-			RootCAs:    preconfigs.MiaokoRootCAPrepare(),
-		},
+// Each sample uses a fresh connection. RTT here is connection setup (TCP plus
+// TLS for HTTPS), not ICMP RTT. HTTP delay runs through response headers.
+func sample(ctx context.Context, p interfaces.Vendor, target string) (uint16, uint16, int, error) {
+	start := time.Now()
+	var connected atomic.Int64
+	transport := &http.Transport{DisableKeepAlives: true, TLSHandshakeTimeout: 5 * time.Second}
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := p.DialTCP(ctx, addr, interfaces.ROptionsTCP)
+		if err == nil {
+			connected.Store(time.Since(start).Milliseconds())
+		}
+		return conn, err
 	}
-
-	req, err := http.NewRequest("GET", url, nil)
+	defer transport.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
-
-	tlsStart := int64(0)
-	tlsEnd := int64(0)
-	writeStart := int64(0)
-	writeEnd := int64(0)
-	trace := &httptrace.ClientTrace{
-		TLSHandshakeStart: func() {
-			tlsStart = time.Now().UnixMilli()
-		},
-		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			tlsEnd = time.Now().UnixMilli()
-			if err != nil {
-				tlsEnd = 0
-			}
-		},
-		GotFirstResponseByte: func() {
-			writeEnd = time.Now().UnixMilli()
-		},
-		WroteHeaders: func() {
-			writeStart = time.Now().UnixMilli()
-		},
-	}
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-
-	connStart := time.Now().UnixMilli()
-	if resp, err := transport.RoundTrip(req); err != nil {
-		return 0, 0, err
-	} else {
-		connEnd := time.Now().UnixMilli()
-		utils.DBlackhole(!strings.HasPrefix(url, "https:"), connEnd-writeEnd, writeEnd-tlsEnd, tlsEnd-tlsStart, tlsStart-connStart)
-		if !strings.HasPrefix(url, "https:") {
-			return uint16(writeStart - connStart), uint16(writeEnd - connStart), nil
+	trace := &httptrace.ClientTrace{TLSHandshakeDone: func(_ tls.ConnectionState, err error) {
+		if err == nil {
+			connected.Store(time.Since(start).Milliseconds())
 		}
-		if resp.TLS != nil && resp.TLS.HandshakeComplete {
-			// use payload rtt
-			return uint16(writeEnd - tlsEnd), uint16(writeEnd - connStart), nil
-			// return uint16(tlsEnd - tlsStart), uint16(writeEnd - connStart), nil
-		}
-		return 0, 0, fmt.Errorf("cannot extract payload from response")
+	}}
+	resp, err := transport.RoundTrip(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	if err != nil {
+		return 0, 0, 0, err
 	}
+	resp.Body.Close()
+	ms := func(v int64) uint16 {
+		if v < 1 {
+			v = 1
+		}
+		if v > 65535 {
+			v = 65535
+		}
+		return uint16(v)
+	}
+	return ms(connected.Load()), ms(time.Since(start).Milliseconds()), resp.StatusCode, nil
 }
 
-func pingViaNetCat(ctx context.Context, p interfaces.Vendor, url string) (uint16, uint16, error) {
-	purl, _ := urllib.Parse(url)
-	data := purl.EscapedPath()
-	if purl.RawQuery != "" {
-		data += "?" + purl.Query().Encode()
-	}
-
-	data = structs.X(preconfigs.NETCAT_HTTP_PAYLOAD, data, purl.Hostname(), utils.VERSION)
-
-	connStart := time.Now().UnixMilli()
-	conn, err := p.DialTCP(ctx, url, interfaces.ROptionsTCP)
-	if err != nil || conn == nil {
-		return 0, 0, fmt.Errorf("cannot dial remote address")
-	}
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(time.Second * 6))
-	c := bufio.NewReader(conn)
-
-	// prewrite to ensure tcp conn is established
-	// httpStartReq1 := time.Now().UnixMilli()
-	if _, err := conn.Write([]byte(data)); err != nil {
-		return 0, 0, fmt.Errorf("cannot write payload to remote")
-	}
-
-	c.ReadLine()
-	for c.Buffered() > 0 {
-		c.ReadLine()
-	}
-
-	httpStartReq2 := time.Now().UnixMilli()
-	if _, err := conn.Write([]byte(data)); err != nil {
-		return 0, 0, fmt.Errorf("cannot write payload to remote")
-	}
-
-	c.ReadLine()
-	for c.Buffered() > 0 {
-		c.ReadLine()
-	}
-	httpEnd := time.Now().UnixMilli()
-
-	return uint16(httpEnd - httpStartReq2), uint16(httpStartReq2 - connStart), nil
-}
-
-func ping(p interfaces.Vendor, url string, withAvg uint16, maxAttempt int, timeout uint) (uint16, uint16, uint16) {
-	if p == nil {
+func statistics(values []uint16) (uint16, uint16, uint16) {
+	if len(values) == 0 {
 		return 0, 0, 0
 	}
-
-	failNum := 0
-	totalMS := []uint16{}
-	totalMSRTT := []uint16{}
-
-	if withAvg < 1 || withAvg > uint16(maxAttempt) {
-		withAvg = 1
+	var sum, variance float64
+	var peak uint16
+	for _, v := range values {
+		sum += float64(v)
+		if v > peak {
+			peak = v
+		}
 	}
+	mean := sum / float64(len(values))
+	for _, v := range values {
+		variance += math.Pow(float64(v)-mean, 2)
+	}
+	return uint16(math.Round(mean)), uint16(math.Round(math.Sqrt(variance / float64(len(values))))), peak
+}
 
-	for failNum+len(totalMS) < maxAttempt && len(totalMS) < int(withAvg) && maxAttempt-failNum >= int(withAvg) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Millisecond)
-		delayRTT, delay := uint16(0), uint16(0)
-		if strings.HasPrefix(url, "https:") {
-			delayRTT, delay, _ = pingViaTrace(ctx, p, url)
-		} else {
-			delayRTT, delay, _ = pingViaNetCat(ctx, p, url)
-		}
-		if delayRTT > 0 {
-			totalMSRTT = append(totalMSRTT, delayRTT)
-			totalMS = append(totalMS, delay)
-		} else {
-			failNum += 1
-		}
+func measure(m *Ping, p interfaces.Vendor, cfg interfaces.SlaveRequestConfigs) {
+	rtts, requests := []uint16{}, []uint16{}
+	p = vendors.WithContext(vendors.Context(p), p)
+	for i := uint16(0); i < cfg.PingAverageOver && vendors.Context(p).Err() == nil; i++ {
+		ctx, cancel := context.WithTimeout(vendors.Context(p), time.Duration(cfg.TaskTimeout)*time.Millisecond)
+		rtt, delay, status, err := sample(ctx, p, cfg.PingAddress)
 		cancel()
+		m.Attempts++
+		if err != nil {
+			m.Failures++
+			continue
+		}
+		m.HTTPCode = status
+		rtts = append(rtts, rtt)
+		requests = append(requests, delay)
 	}
-
-	resultRTT, result, resultStd := uint16(0), uint16(0), uint16(0)
-	if len(totalMSRTT) >= int(withAvg) {
-		resultRTT = computeAvgOfPing(totalMSRTT)
-		result = computeAvgOfPing(totalMS)
-		resultStd = computeStdOfPing(totalMSRTT, resultRTT)
-	}
-	return resultRTT, result, resultStd
+	m.RTT, m.RTTStd, m.RTTMax = statistics(rtts)
+	m.Request, m.RequestStd, m.RequestMax = statistics(requests)
 }

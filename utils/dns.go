@@ -16,8 +16,11 @@ var DnsCache *obliviousmap.ObliviousMap[*interfaces.IPStacks]
 
 // queryServer = "8.8.8.8:53"
 func DNSLookuper(addr string, queryServers []string) []net.IP {
+	return DNSLookuperContext(context.Background(), addr, queryServers)
+}
+func DNSLookuperContext(ctx context.Context, addr string, queryServers []string) []net.IP {
 	if len(queryServers) == 0 {
-		result, _ := net.LookupIP(addr)
+		result, _ := net.DefaultResolver.LookupIP(ctx, "ip", addr)
 		return result
 	}
 
@@ -32,7 +35,7 @@ func DNSLookuper(addr string, queryServers []string) []net.IP {
 				return d.DialContext(ctx, network, server)
 			},
 		}
-		addrs, _ := r.LookupIPAddr(context.Background(), addr)
+		addrs, _ := r.LookupIPAddr(ctx, addr)
 		for _, ia := range addrs {
 			ipSets[ia.IP.String()] = ia.IP
 		}
@@ -49,14 +52,17 @@ func DNSLookuper(addr string, queryServers []string) []net.IP {
 }
 
 func LookupIPv46(addr string, retry int, queryServers []string) *interfaces.IPStacks {
+	return LookupIPv46Context(context.Background(), addr, retry, queryServers)
+}
+func LookupIPv46Context(ctx context.Context, addr string, retry int, queryServers []string) *interfaces.IPStacks {
 	token := fmt.Sprintf("%v|%v", addr, queryServers)
 	if r, ok := DnsCache.Get(token); ok && r != nil {
 		return r
 	}
 
 	netips := []net.IP{}
-	for i := 0; i < retry && len(netips) == 0; i += 1 {
-		netips = DNSLookuper(addr, queryServers)
+	for i := 0; i < retry && len(netips) == 0 && ctx.Err() == nil; i += 1 {
+		netips = DNSLookuperContext(ctx, addr, queryServers)
 	}
 	DLogf("DNS Lookup | dns=%v result=%v", queryServers, netips)
 

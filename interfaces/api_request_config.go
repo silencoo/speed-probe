@@ -10,6 +10,7 @@ type SlaveRequestConfigs struct {
 	DownloadURL       string `yaml:"downloadURL,omitempty" cf:"name=📃 测速文件"`
 	DownloadDuration  int64  `yaml:"downloadDuration,omitempty" cf:"name=⏱️ 测速时长 (单位: 秒)"`
 	DownloadThreading uint   `yaml:"downloadThreading,omitempty" cf:"name=🧶 测速线程数"`
+	DownloadBytes     uint64 `yaml:"downloadBytes,omitempty"` // Per-node body-byte budget, shared by all connections; 0 means unlimited.
 
 	PingAverageOver uint16 `yaml:"pingAverageOver,omitempty" cf:"name=🧮 多次 Ping 求均值,value"`
 	PingAddress     string `yaml:"pingAddress,omitempty" cf:"name=🏫 URL Ping 地址"`
@@ -36,6 +37,7 @@ func (src *SlaveRequestConfigs) Clone() *SlaveRequestConfigs {
 		DownloadURL:       src.DownloadURL,
 		DownloadDuration:  src.DownloadDuration,
 		DownloadThreading: src.DownloadThreading,
+		DownloadBytes:     src.DownloadBytes,
 
 		PingAverageOver: src.PingAverageOver,
 		PingAddress:     src.PingAddress,
@@ -62,6 +64,9 @@ func (src *SlaveRequestConfigs) Merge(from *SlaveRequestConfigs) *SlaveRequestCo
 	}
 	if from.DownloadThreading != 0 {
 		ret.DownloadThreading = from.DownloadThreading
+	}
+	if from.DownloadBytes != 0 {
+		ret.DownloadBytes = from.DownloadBytes
 	}
 
 	if from.PingAverageOver != 0 {

@@ -17,22 +17,6 @@ func (sro *SlaveRequestOptions) Clone() *SlaveRequestOptions {
 	}
 }
 
-type SlaveRequestBasics struct {
-	ID        string
-	Slave     string
-	SlaveName string
-	Version   string
-}
-
-func (srb *SlaveRequestBasics) Clone() *SlaveRequestBasics {
-	return &SlaveRequestBasics{
-		ID:        srb.ID,
-		Slave:     srb.Slave,
-		SlaveName: srb.SlaveName,
-		Version:   srb.Version,
-	}
-}
-
 type SlaveRequestNode struct {
 	Name    string
 	Payload string
@@ -46,7 +30,6 @@ func (srn *SlaveRequestNode) Clone() *SlaveRequestNode {
 }
 
 type SlaveRequest struct {
-	Basics  SlaveRequestBasics
 	Options SlaveRequestOptions
 	Configs SlaveRequestConfigs
 
@@ -56,7 +39,6 @@ type SlaveRequest struct {
 
 func (sr *SlaveRequest) Clone() *SlaveRequest {
 	return &SlaveRequest{
-		Basics:  *sr.Basics.Clone(),
 		Options: *sr.Options.Clone(),
 		Configs: *sr.Configs.Clone(),
 		Vendor:  sr.Vendor,

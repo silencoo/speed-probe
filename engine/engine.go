@@ -2,8 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"sync"
-	"time"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/console"
@@ -12,7 +10,6 @@ import (
 	"github.com/silencoo/speed-probe/engine/factory"
 	"github.com/silencoo/speed-probe/interfaces"
 	"github.com/silencoo/speed-probe/utils"
-	"github.com/silencoo/speed-probe/utils/structs"
 )
 
 func VMNew() *goja.Runtime {
@@ -86,33 +83,6 @@ func ExecTaskCallback(vm *goja.Runtime, caller string, args ...interface{}) (ret
 		ret, err = fn(goja.Undefined(), values...)
 		return nil
 	})
-
-	return
-}
-
-func RunWithTimeout(vm *goja.Runtime, timeout time.Duration, fn func() (goja.Value, error)) (ret goja.Value, err error) {
-	vmLock := sync.Mutex{}
-	finished := false
-
-	if timeout > 0 {
-		timeout = structs.WithIn(timeout, time.Second, time.Minute)
-		time.AfterFunc(timeout, func() {
-			vmLock.Lock()
-			defer vmLock.Unlock()
-
-			if !finished {
-				finished = true
-				vm.Interrupt("script executing too long")
-			}
-		})
-
-	}
-
-	ret, err = fn()
-
-	vmLock.Lock()
-	finished = true
-	vmLock.Unlock()
 
 	return
 }

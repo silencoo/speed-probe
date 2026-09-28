@@ -56,7 +56,7 @@ prepare_tls_pair() {
     validate_tls_pair
 }
 
-command -v go >/dev/null 2>&1 || fail "Go 1.21 or newer is required"
+command -v go >/dev/null 2>&1 || fail "Go 1.25.5 or newer is required"
 
 mkdir -p "$dist_dir"
 prepare_tls_pair
@@ -65,9 +65,9 @@ commit="$(git -C "$project_root" rev-parse --short HEAD 2>/dev/null || printf un
 compilation_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ldflags="-s -w -X main.COMMIT=$commit -X main.COMPILATIONTIME=$compilation_time"
 
-printf 'Building speed-probe with Mihomo support...\n'
+printf 'Building speed-probe with Mihomo and sing-box support...\n'
 cd "$project_root"
-go build -trimpath -ldflags "$ldflags" -o "$dist_dir/speed-probe" .
+go build -tags with_utls -trimpath -ldflags "$ldflags" -o "$dist_dir/speed-probe" .
 
 printf 'Built %s\n' "$dist_dir/speed-probe"
 if [[ -f "$cert_file" && -f "$key_file" ]]; then

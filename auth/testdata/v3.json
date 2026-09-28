@@ -1,0 +1,67 @@
+{
+  "description": {
+    "protocol": 3,
+    "type": "description",
+    "description": {
+      "software_version": "1.0",
+      "supported": [
+        "ping",
+        "script",
+        "topo",
+        "speed",
+        "custom_script"
+      ],
+      "allowed": [
+        "ping",
+        "script"
+      ],
+      "limits": {
+        "max_nodes": 300,
+        "max_jobs": 2,
+        "max_seconds": 600,
+        "max_scripts": 32
+      },
+      "scripts": [
+        {
+          "id": "example",
+          "type": "media"
+        }
+      ]
+    }
+  },
+  "run": {
+    "protocol": 3,
+    "type": "run",
+    "task_id": "fixture-task",
+    "request": {
+      "Vendor": "Local",
+      "Nodes": [
+        {
+          "Name": "测试 & <node>",
+          "Payload": ""
+        }
+      ],
+      "Options": {
+        "Matrices": []
+      }
+    }
+  },
+  "finished": {
+    "protocol": 3,
+    "type": "finished",
+    "task_id": "fixture-task",
+    "state": "succeeded",
+    "results": [
+      {
+        "index": 0,
+        "ProxyInfo": {
+          "Name": "测试 & <node>",
+          "Address": "127.0.0.1",
+          "Type": "Unknown"
+        },
+        "InvokeDuration": 0,
+        "Matrices": []
+      }
+    ]
+  }
+}

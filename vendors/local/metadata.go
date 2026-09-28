@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 func urlToMetadata(rawURL string) (string, uint16, error) {
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "tcp://" + rawURL
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", 0, fmt.Errorf("cannot parse the url")

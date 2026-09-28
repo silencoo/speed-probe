@@ -1,7 +1,7 @@
 package udp
 
 import (
-	"context"
+	"github.com/silencoo/speed-probe/vendors"
 	"strings"
 	"sync"
 
@@ -9,10 +9,10 @@ import (
 )
 
 func detectNATType(proxy interfaces.Vendor, url string) (nmt NATMapType, nft NATFilterType) {
-	addrStr := strings.TrimLeft(url, "udp://")
+	addrStr := strings.TrimPrefix(url, "udp://")
 
 	wg := sync.WaitGroup{}
-	ctx := context.Background()
+	ctx := vendors.Context(proxy)
 
 	wg.Add(1)
 	go func() {

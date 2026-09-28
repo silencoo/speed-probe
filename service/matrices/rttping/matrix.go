@@ -7,6 +7,10 @@ import (
 
 type RTTPing struct {
 	interfaces.RTTPingDS
+	Max      uint16
+	Attempts int
+	Failures int
+	HTTPCode int
 }
 
 func (m *RTTPing) Type() interfaces.SlaveRequestMatrixType {
@@ -20,6 +24,10 @@ func (m *RTTPing) MacroJob() interfaces.SlaveRequestMacroType {
 func (m *RTTPing) Extract(entry interfaces.SlaveRequestMatrixEntry, macro interfaces.SlaveRequestMacro) {
 	if mac, ok := macro.(*ping.Ping); ok {
 		m.Value = mac.RTT
+		m.Max = mac.RTTMax
+		m.Attempts = mac.Attempts
+		m.Failures = mac.Failures
+		m.HTTPCode = mac.HTTPCode
 		m.StdDev = mac.RTTStd
 	}
 }
