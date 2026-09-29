@@ -3,10 +3,10 @@ package udp
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/pion/stun"
-	"github.com/silencoo/speed-probe/utils"
 )
 
 type NATMapType int
@@ -28,237 +28,157 @@ const (
 	NATFilterAddrPortIndependent
 )
 
-type stunServerConn struct {
-	conn        net.PacketConn
-	LocalAddr   net.Addr
-	RemoteAddr  *net.UDPAddr
-	OtherAddr   *net.UDPAddr
-	messageChan chan *stun.Message
-}
-
-func (c *stunServerConn) Close() error {
-	return nil
-}
-
-const (
-	messageHeaderSize = 20
-	natTimeout        = 3
-)
-
 var (
-	errResponseMessage = errors.New("error reading from response message channel")
-	errTimedOut        = errors.New("timed out waiting for response")
-	errNoOtherAddress  = errors.New("no OTHER-ADDRESS in message")
+	errTimedOut        = errors.New("STUN response timed out")
+	errNoOtherAddress  = errors.New("STUN behavior discovery unsupported")
+	errInvalidResponse = errors.New("invalid STUN response")
+	errSTUNRejected    = errors.New("STUN request rejected")
 )
 
-// RFC5780: 4.3.  Determining NAT Mapping Behavior
-func MappingTests(conn net.PacketConn, addrStr string) NATMapType {
-	mapTestConn, err := connect(conn, addrStr)
-	if err != nil {
-		utils.DLog("NAT MAP TEST | cannot connect to stun server:", err.Error())
-		return NATMapFailed
-	}
-
-	// Test I: Regular binding request
+// No reader goroutine: closing the task's packet connection interrupts ReadFrom.
+// Retry once within the fixed budget and ignore unrelated/stale datagrams.
+func roundTrip(conn net.PacketConn, target, expected *net.UDPAddr, flags byte, timeout time.Duration) (*stun.Message, error) {
 	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
-	resp, err := mapTestConn.roundTrip(request, mapTestConn.RemoteAddr, natTimeout)
-	if err != nil {
-		utils.DLog("NAT MAP TEST | TEST I Failed:", err.Error())
-		return NATMapFailed
+	if flags != 0 {
+		request.Add(stun.AttrChangeRequest, []byte{0, 0, 0, flags})
 	}
-
-	// Parse response message for XOR-MAPPED-ADDRESS and make sure OTHER-ADDRESS valid
-	resps1 := parse(resp)
-	if resps1.xorAddr == nil || resps1.otherAddr == nil {
-		utils.DLog("NAT MAP TEST | TEST I Failed: no other address")
-		return NATMapFailed
-	}
-	addr, err := net.ResolveUDPAddr("udp4", resps1.otherAddr.String())
-	if err != nil {
-		utils.DLog("NAT MAP TEST | TEST I Resolve Failed:", err.Error())
-		return NATMapFailed
-	}
-	mapTestConn.OtherAddr = addr
-
-	// Assert mapping behavior
-	if resps1.xorAddr.String() == mapTestConn.LocalAddr.String() {
-		return NATMapNoNat
-	}
-
-	// Test II: Send binding request to the other address but primary port
-	oaddr := *mapTestConn.OtherAddr
-	oaddr.Port = mapTestConn.RemoteAddr.Port
-	resp, err = mapTestConn.roundTrip(request, &oaddr, natTimeout)
-	if err != nil {
-		utils.DLog("NAT MAP TEST | TEST II Failed:", err.Error())
-		return NATMapFailed
-	}
-
-	// Assert mapping behavior
-	resps2 := parse(resp)
-	if resps2.xorAddr.String() == resps1.xorAddr.String() {
-		return NATMapIndependent
-	}
-
-	// Test III: Send binding request to the other address and port
-	resp, err = mapTestConn.roundTrip(request, mapTestConn.OtherAddr, natTimeout)
-	if err != nil {
-		utils.DLog("NAT MAP TEST | TEST III Failed:", err.Error())
-		return NATMapFailed
-	}
-
-	// Assert mapping behavior
-	resps3 := parse(resp)
-	if resps3.xorAddr.String() == resps2.xorAddr.String() {
-		return NATMapAddrIndependent
-	} else {
-		return NATMapAddrPortIndependent
-	}
-}
-
-// RFC5780: 4.4.  Determining NAT Filtering Behavior
-func FilteringTests(conn net.PacketConn, addrStr string) NATFilterType {
-	mapTestConn, err := connect(conn, addrStr)
-	if err != nil {
-		utils.DLog("NAT FLT TEST | cannot connect to stun server:", err.Error())
-		return NATFilterFailed
-	}
-
-	// Test I: Regular binding request
-	request := stun.MustBuild(stun.TransactionID, stun.BindingRequest)
-	resp, err := mapTestConn.roundTrip(request, mapTestConn.RemoteAddr, natTimeout)
-	if err != nil || errors.Is(err, errTimedOut) {
-		utils.DLog("NAT FLT TEST | TEST I Failed:", err.Error())
-		return NATFilterFailed
-	}
-	resps := parse(resp)
-	if resps.xorAddr == nil || resps.otherAddr == nil {
-		utils.DLog("NAT FLT TEST | TEST I Failed: no other address")
-		return NATFilterFailed
-	}
-	addr, err := net.ResolveUDPAddr("udp4", resps.otherAddr.String())
-	if err != nil {
-		utils.DLog("NAT FLT TEST | TEST I Failed:", err.Error())
-		return NATFilterFailed
-	}
-	mapTestConn.OtherAddr = addr
-
-	// Test II: Request to change both IP and port
-	request = stun.MustBuild(stun.TransactionID, stun.BindingRequest)
-	request.Add(stun.AttrChangeRequest, []byte{0x00, 0x00, 0x00, 0x06})
-
-	resp, err = mapTestConn.roundTrip(request, mapTestConn.RemoteAddr, natTimeout)
-	if err == nil {
-		return NATFilterIndependent
-	} else if !errors.Is(err, errTimedOut) {
-		utils.DLog("NAT FLT TEST | TEST II Failed:", err.Error())
-		return NATFilterFailed
-	}
-
-	// Test III: Request to change port only
-	request = stun.MustBuild(stun.TransactionID, stun.BindingRequest)
-	request.Add(stun.AttrChangeRequest, []byte{0x00, 0x00, 0x00, 0x02})
-	resp, err = mapTestConn.roundTrip(request, mapTestConn.RemoteAddr, natTimeout)
-	if err == nil {
-		return NATFilterAddrIndependent
-	} else if errors.Is(err, errTimedOut) {
-		return NATFilterAddrPortIndependent
-	}
-
-	return NATFilterFailed
-}
-
-// Parse a STUN message
-func parse(msg *stun.Message) (ret struct {
-	xorAddr    *stun.XORMappedAddress
-	otherAddr  *stun.OtherAddress
-	respOrigin *stun.ResponseOrigin
-	mappedAddr *stun.MappedAddress
-	software   *stun.Software
-}) {
-	ret.mappedAddr = &stun.MappedAddress{}
-	ret.xorAddr = &stun.XORMappedAddress{}
-	ret.respOrigin = &stun.ResponseOrigin{}
-	ret.otherAddr = &stun.OtherAddress{}
-	ret.software = &stun.Software{}
-	if ret.xorAddr.GetFrom(msg) != nil {
-		ret.xorAddr = nil
-	}
-	if ret.otherAddr.GetFrom(msg) != nil {
-		ret.otherAddr = nil
-	}
-	if ret.respOrigin.GetFrom(msg) != nil {
-		ret.respOrigin = nil
-	}
-	if ret.mappedAddr.GetFrom(msg) != nil {
-		ret.mappedAddr = nil
-	}
-	if ret.software.GetFrom(msg) != nil {
-		ret.software = nil
-	}
-	return ret
-}
-
-// Given an address string, returns a StunServerConn
-func connect(conn net.PacketConn, addrStr string) (*stunServerConn, error) {
-	addr, err := net.ResolveUDPAddr("udp4", addrStr)
-	if err != nil {
-		return nil, err
-	}
-
-	mChan := listen(conn)
-	return &stunServerConn{
-		conn:        conn,
-		LocalAddr:   conn.LocalAddr(),
-		RemoteAddr:  addr,
-		messageChan: mChan,
-	}, nil
-}
-
-// Send request and wait for response or timeout
-func (c *stunServerConn) roundTrip(msg *stun.Message, addr net.Addr, timeout int) (*stun.Message, error) {
-	_ = msg.NewTransactionID()
-	_, err := c.conn.WriteTo(msg.Raw, addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Wait for response or timeout
-	select {
-	case m, ok := <-c.messageChan:
-		if !ok {
-			return nil, errResponseMessage
+	end := time.Now().Add(timeout)
+	buf := make([]byte, 2048)
+	for attempt := 0; attempt < 2; attempt++ {
+		deadline := end
+		if attempt == 0 {
+			deadline = time.Now().Add(timeout / 2)
 		}
-		return m, nil
-	case <-time.After(time.Duration(timeout) * time.Second):
-		return nil, errTimedOut
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+		if _, err := conn.WriteTo(request.Raw, target); err != nil {
+			return nil, err
+		}
+		for time.Now().Before(deadline) {
+			n, source, err := conn.ReadFrom(buf)
+			if err != nil {
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
+					break
+				}
+				return nil, err
+			}
+			msg := &stun.Message{Raw: append([]byte(nil), buf[:n]...)}
+			if msg.Decode() != nil || msg.TransactionID != request.TransactionID {
+				continue
+			}
+			if msg.Type == stun.BindingError {
+				return nil, errSTUNRejected
+			}
+			if msg.Type != stun.BindingSuccess {
+				continue
+			}
+			if !sameAddress(source, expected) {
+				return nil, errNoOtherAddress
+			}
+			return msg, nil
+		}
 	}
+	return nil, errTimedOut
+}
+func sameAddress(a net.Addr, b *net.UDPAddr) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	// Some cores return their own net.Addr implementation.
+	address, err := netip.ParseAddrPort(a.String())
+	ip, ok := netip.AddrFromSlice(b.IP)
+	return err == nil && ok && int(address.Port()) == b.Port && address.Addr().Unmap() == ip.Unmap()
+}
+func mapped(msg *stun.Message) (*stun.XORMappedAddress, error) {
+	addr := new(stun.XORMappedAddress)
+	if addr.GetFrom(msg) != nil || addr.IP == nil || addr.Port < 1 {
+		return nil, errInvalidResponse
+	}
+	return addr, nil
+}
+func other(msg *stun.Message, primary *net.UDPAddr) (*net.UDPAddr, error) {
+	addr := new(stun.OtherAddress)
+	if addr.GetFrom(msg) != nil || addr.IP.To4() == nil || addr.Port < 1 || addr.Port == primary.Port || addr.IP.Equal(primary.IP) {
+		return nil, errNoOtherAddress
+	}
+	return &net.UDPAddr{IP: addr.IP, Port: addr.Port}, nil
 }
 
-// taken from https://github.com/pion/stun/blob/master/cmd/stun-traversal/main.go
-func listen(conn net.PacketConn) (messages chan *stun.Message) {
-	messages = make(chan *stun.Message)
-	go func() {
-		for {
-			buf := make([]byte, 1024)
-
-			n, _, err := conn.ReadFrom(buf)
-			if err != nil {
-				close(messages)
-				return
-			}
-			buf = buf[:n]
-
-			m := new(stun.Message)
-			m.Raw = buf
-			err = m.Decode()
-			if err != nil {
-				close(messages)
-				return
-			}
-
-			messages <- m
-		}
-	}()
-	return
+// RFC 5780 mapping and filtering need separate sockets: sending to the alternate
+// server during mapping would open the filter being measured by filtering.
+func mappingTests(conn net.PacketConn, primary *net.UDPAddr, timeout time.Duration) (NATMapType, bool, error) {
+	first, err := roundTrip(conn, primary, primary, 0, timeout)
+	if err != nil {
+		return NATMapFailed, false, err
+	}
+	a, err := mapped(first)
+	if err != nil {
+		return NATMapFailed, false, err
+	}
+	alternate, err := other(first, primary)
+	if err != nil {
+		return NATMapFailed, true, err
+	}
+	if sameAddress(conn.LocalAddr(), &net.UDPAddr{IP: a.IP, Port: a.Port}) {
+		return NATMapNoNat, true, nil
+	}
+	secondAddr := &net.UDPAddr{IP: alternate.IP, Port: primary.Port}
+	second, err := roundTrip(conn, secondAddr, secondAddr, 0, timeout)
+	if err != nil {
+		return NATMapFailed, true, err
+	}
+	b, err := mapped(second)
+	if err != nil {
+		return NATMapFailed, true, err
+	}
+	if a.String() == b.String() {
+		return NATMapIndependent, true, nil
+	}
+	third, err := roundTrip(conn, alternate, alternate, 0, timeout)
+	if err != nil {
+		return NATMapFailed, true, err
+	}
+	c, err := mapped(third)
+	if err != nil {
+		return NATMapFailed, true, err
+	}
+	if b.String() == c.String() {
+		return NATMapAddrIndependent, true, nil
+	}
+	return NATMapAddrPortIndependent, true, nil
+}
+func filteringTests(conn net.PacketConn, primary *net.UDPAddr, timeout time.Duration) (NATFilterType, bool, error) {
+	first, err := roundTrip(conn, primary, primary, 0, timeout)
+	if err != nil {
+		return NATFilterFailed, false, err
+	}
+	if _, err = mapped(first); err != nil {
+		return NATFilterFailed, false, err
+	}
+	alternate, err := other(first, primary)
+	if err != nil {
+		return NATFilterFailed, true, err
+	}
+	_, err = roundTrip(conn, primary, alternate, 6, timeout)
+	if err == nil {
+		return NATFilterIndependent, true, nil
+	}
+	if !errors.Is(err, errTimedOut) {
+		return NATFilterFailed, true, err
+	}
+	expected := &net.UDPAddr{IP: primary.IP, Port: alternate.Port}
+	_, err = roundTrip(conn, primary, expected, 2, timeout)
+	if err == nil {
+		return NATFilterAddrIndependent, true, nil
+	}
+	if !errors.Is(err, errTimedOut) {
+		return NATFilterFailed, true, err
+	}
+	// A lost connection is not evidence of a port-restricted filter.
+	if _, err = roundTrip(conn, primary, primary, 0, timeout); err != nil {
+		return NATFilterFailed, true, err
+	}
+	return NATFilterAddrPortIndependent, true, nil
 }

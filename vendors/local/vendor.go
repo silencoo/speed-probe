@@ -36,7 +36,7 @@ func (c *Local) DialTCP(ctx context.Context, url string, network interfaces.Requ
 }
 
 func (c *Local) DialUDP(ctx context.Context, url string) (net.PacketConn, error) {
-	return nil, fmt.Errorf("local test does not support udp yet")
+	return nil, interfaces.ErrUDPUnsupported
 
 }
 func (c *Local) ProxyInfo() interfaces.ProxyInfo {

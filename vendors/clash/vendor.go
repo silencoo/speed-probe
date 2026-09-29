@@ -2,6 +2,7 @@ package clash
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
@@ -56,7 +57,11 @@ func (c *Clash) DialUDP(ctx context.Context, url string) (net.PacketConn, error)
 		return nil, fmt.Errorf("cannot build udp context")
 	}
 
-	return c.proxy.ListenPacketContext(ctx, &addr)
+	conn, err := c.proxy.ListenPacketContext(ctx, &addr)
+	if errors.Is(err, constant.ErrNotSupport) {
+		return nil, interfaces.ErrUDPUnsupported
+	}
+	return conn, err
 
 }
 func (c *Clash) ProxyInfo() interfaces.ProxyInfo {

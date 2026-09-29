@@ -114,6 +114,12 @@ TEST_PING_CONN／TEST_PING_RTT payload 增加 Max、StdDev、Attempts、Failures
 
 下载矩阵 `SPEED_AVERAGE` 也可携带 `ErrorCode` 和 `HTTPCode`。错误分类包含上述网络错误及 `http_error`（非 200/206 响应）、`empty_response`（空正文）。全程零字节的超时标记为 `download_error` + `timeout`；已收到数据并到达时长或流量上限仍属于正常停止，用户取消仍为 `cancelled`。不会回传原始错误文本或错误响应正文。
 
+## UDP / NAT 检测状态
+
+`UDP_TYPE` payload 保留 `Value`，新增布尔 `Reachable` 和可选 `ErrorCode`。`Reachable=true` 只表示收到有效 STUN 绑定响应，类型为 `Unknown` 时仍可能支持 UDP。`false` 表示尚未验证，不能据此断言节点不支持 UDP。
+
+`ErrorCode` 包含网络错误分类，以及 `udp_unsupported`、`stun_unsupported`（无 RFC 5780 扩展或未按请求改变响应来源）、`stun_invalid_response`、`stun_rejected`。不回传原始错误或映射 IP。检测使用独立的映射/过滤会话，校验响应事务与来源，固定时间内重试；类型描述代理出口 IPv4 行为。默认 STUN 为 `udp://stunserver2025.stunprotocol.org:3478`，来源：https://www.stunprotocol.org/ 。
+
 ## 脚本检测状态
 
 TEST_SCRIPT payload 保留 `Key`、`Text`、`Color`、`Background`、`TimeElapsed`，新增可选 `Status`，透传脚本返回对象的 `status`。自带脚本使用 `reachable`、`restricted`、`unknown`、`challenge`、`rate_limited`、`network_error`；脚本异常/超时返回 `network_error` 和相应说明文本。纯字符串脚本不生成 Status，兼容旧脚本与旧 v3 客户端。控制端优先按语义状态显示结果，不从背景色推断检测结论。此扩展不改变 v3 认证，已有 Token 无需重新签发。

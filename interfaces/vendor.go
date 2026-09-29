@@ -2,8 +2,11 @@ package interfaces
 
 import (
 	"context"
+	"errors"
 	"net"
 )
+
+var ErrUDPUnsupported = errors.New("outbound does not support UDP")
 
 type VendorType string
 

@@ -20,5 +20,7 @@ func (m *UDPType) MacroJob() interfaces.SlaveRequestMacroType {
 func (m *UDPType) Extract(entry interfaces.SlaveRequestMatrixEntry, macro interfaces.SlaveRequestMacro) {
 	if mac, ok := macro.(*udp.Udp); ok {
 		m.Value = mac.NATType
+		m.Reachable = mac.Reachable
+		m.ErrorCode = mac.ErrorCode
 	}
 }

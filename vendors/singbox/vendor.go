@@ -15,6 +15,7 @@ import (
 	"github.com/silencoo/speed-probe/interfaces"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -113,6 +114,9 @@ func (s *SingBox) DialTCP(ctx context.Context, raw string, network interfaces.Re
 func (s *SingBox) DialUDP(ctx context.Context, raw string) (net.PacketConn, error) {
 	if s.outbound == nil {
 		return nil, fmt.Errorf("sing-box is not ready")
+	}
+	if !slices.Contains(s.outbound.Network(), "udp") {
+		return nil, interfaces.ErrUDPUnsupported
 	}
 	dest, err := destination(raw)
 	if err != nil {

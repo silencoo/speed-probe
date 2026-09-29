@@ -7,7 +7,7 @@ type HTTPPingDS struct {
 }
 
 type RTTPingDS struct {
-	Value uint16
+	Value  uint16
 	StdDev uint16
 }
 
@@ -26,7 +26,9 @@ type PerSecondSpeedDS struct {
 }
 
 type UDPTypeDS struct {
-	Value string
+	Value     string
+	Reachable bool
+	ErrorCode string `json:",omitempty"`
 }
 
 type ScriptTestDS struct {
