@@ -59,12 +59,49 @@ func TestUniformDurationAndErrorReason(t *testing.T) {
 		Once(m, vendors.WithContext(context.Background(), nil), &interfaces.SlaveRequestConfigs{DownloadURL: server.URL, DownloadDuration: 1, DownloadThreading: 4})
 		server.Close()
 		if code == 403 {
-			if m.TotalSize != 0 || m.StopReason != "download_error" {
+			if m.TotalSize != 0 || m.StopReason != "download_error" || m.ErrorCode != "http_error" || m.HTTPCode != 403 {
 				t.Fatalf("%+v", m)
 			}
 		} else if m.TotalSize == 0 || m.StopReason != "duration" || m.ElapsedMillis < 950 || m.ElapsedMillis > 2000 {
 			t.Fatalf("%+v", m)
 		}
+	}
+}
+
+func TestNoDownloadBytesReportsTimeoutOrEmptyBody(t *testing.T) {
+	for _, stage := range []string{"headers", "body", "empty"} {
+		t.Run(stage, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if stage == "empty" {
+					return
+				}
+				if stage == "body" {
+					w.WriteHeader(200)
+					w.(http.Flusher).Flush()
+				}
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			m := &Speed{}
+			Once(m, vendors.WithContext(context.Background(), nil), &interfaces.SlaveRequestConfigs{DownloadURL: server.URL, DownloadDuration: 1, DownloadThreading: 2})
+			want := "timeout"
+			if stage == "empty" {
+				want = "empty_response"
+			}
+			if m.TotalSize != 0 || m.StopReason != "download_error" || m.ErrorCode != want {
+				t.Fatalf("%+v", m)
+			}
+		})
+	}
+}
+
+func TestCancelIsNotDownloadFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m := &Speed{}
+	Once(m, vendors.WithContext(ctx, nil), &interfaces.SlaveRequestConfigs{DownloadURL: "http://127.0.0.1:1", DownloadDuration: 1, DownloadThreading: 2})
+	if m.StopReason != "cancelled" || m.ErrorCode != "" {
+		t.Fatalf("%+v", m)
 	}
 }
 

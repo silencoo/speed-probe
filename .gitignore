@@ -18,6 +18,9 @@ config.yaml
 /clients.json.lock
 /.clients-*
 /connection*.json
+/agent*.json
+/agent*.identity
+!/agent.example.json
 
 # Generated or externally supplied credentials
 /preconfigs/embeded/miaokoCA/*.crt
@@ -36,3 +39,7 @@ fonts/
 # OS metadata
 .DS_Store
 ._.DS_Store
+/data/
+.env
+.env.*
+!.env.example

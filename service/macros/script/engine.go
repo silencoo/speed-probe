@@ -41,6 +41,7 @@ func ExecScript(p interfaces.Vendor, script *interfaces.Script) interfaces.Scrip
 
 	s.TimeElapsed = time.Now().UnixMilli() - startTime.UnixMilli()
 	if engine.ThrowExecTaskErr("MediaTest", err) {
+		s.Status = "network_error"
 		s.Text = "脚本错误"
 		if ctx.Err() != nil {
 			s.Text = "检测超时"
@@ -49,6 +50,9 @@ func ExecScript(p interfaces.Vendor, script *interfaces.Script) interfaces.Scrip
 	} else if text, ok := helpers.VMSafeStr(ret); ok {
 		s.Text = text
 	} else if ro, _ := helpers.VMSafeObj(vm, ret); ro != nil {
+		if v, ok := helpers.VMSafeStr(ro.Get("status")); ok {
+			s.Status = v
+		}
 		if v, ok := helpers.VMSafeStr(ro.Get("text")); ok {
 			s.Text = v
 		}

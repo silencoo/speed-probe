@@ -46,7 +46,8 @@ func RunCliScriptTest() {
 	vendor := vendors.Find(interfaces.VendorLocal)
 	utils.DInfof("Script Test | Using vendor %s", vendor.Type())
 	scriptResult := script.ExecScript(vendor, &interfaces.Script{
-		Content: string(fileContent),
+		Content:       string(fileContent),
+		TimeoutMillis: 30000,
 	})
 
 	fmt.Println("\n" + utils.ToJSON(scriptResult))

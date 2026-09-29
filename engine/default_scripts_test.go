@@ -27,6 +27,9 @@ func TestDefaultGeoFallbackDoesNotCacheErrorAsSuccess(t *testing.T) {
 	if calls != 2 || obj.Get("asn").ToInteger() != 13335 {
 		t.Fatal("fallback failed")
 	}
+	if obj.Get("source").String() != "ipapi.co" || obj.Get("isp").String() != "" {
+		t.Fatal("source lost or ASN organization mislabeled as ISP")
+	}
 	vm.Set("fetch", func(goja.FunctionCall) goja.Value { return goja.Null() })
 	result, err = ExecTaskCallback(vm, "handler", "1.1.1.1")
 	if err != nil {

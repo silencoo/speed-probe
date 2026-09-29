@@ -16,6 +16,7 @@ type Script struct {
 
 type ScriptResult struct {
 	Text        string
+	Status      string `json:",omitempty"`
 	Color       string
 	Background  string
 	TimeElapsed int64
@@ -24,6 +25,7 @@ type ScriptResult struct {
 func (sr *ScriptResult) Clone() *ScriptResult {
 	return &ScriptResult{
 		Text:        sr.Text,
+		Status:      sr.Status,
 		Color:       sr.Color,
 		Background:  sr.Background,
 		TimeElapsed: sr.TimeElapsed,

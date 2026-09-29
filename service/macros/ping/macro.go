@@ -14,6 +14,7 @@ type Ping struct {
 	Attempts   int
 	Failures   int
 	HTTPCode   int
+	ErrorCode  string
 }
 
 func (m *Ping) Type() interfaces.SlaveRequestMacroType {

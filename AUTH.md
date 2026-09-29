@@ -2,6 +2,16 @@
 
 speed-control 管理 Telegram 用户，speed-probe 管理独立客户端。远程使用 WSS，握手通过 `Authorization: Bearer <token>` 认证。此认证不证明后端程序未修改或测速结果真实。
 
+## NAS 主动连接模式
+
+使用 `agent -config agent.json` 时，NAS 自行填写 name 和 controller，首次启动生成稳定 ID 和高熵令牌，保存在旁边的 `agent.json.identity`。NAS 主动提交注册，管理员在 Bot 私聊 `/backend pending`，核对 NAS 日志的 16 位指纹后 `/backend approve 指纹`。批准前不允许连接执行任务；批准后自动重连接入。两端没有启动先后要求。Bot 数据库只保存令牌的 SHA-256 哈希；NAS 持有原令牌。此模式不使用 clients.json，也不监听入站端口。
+
+Bot 验证 NAS 身份，NAS 验证控制端 TLS 证书。任务能力和资源上限由 NAS 本地 agent.json 决定，修改后重启 agent；控制端不能通过下发任务提升这些权限。默认不允许上传任意 JS，仅运行 NAS 已安装的脚本。认证仍不证明测速程序或结果未被修改，也不使用 HMAC。
+
+`/backend reject 指纹` 拒绝申请；`/backend remove ID` 撤销身份并断开连接。被拒绝/撤销的 Token 不能自动再次提交审核；需要重新接入时，在 NAS 停机备份移走身份文件，重新启动生成新身份并审核。请求以完整 Token 哈希去重，最多 100 条待审核申请、7 天有效期；不能覆盖已批准 ID。Bot 每秒复查活动连接的凭据，数据库校验失败也会关闭连接。数据库中的内部 token 字段是缓存版本标记，不能用于 NAS 接入认证。
+
+原 `/backend enroll ID 名称` 和 `/backend rotate ID` 手动签发文件流程继续兼容。配置中显式填写 token 时不生成身份文件，替换为手动签发的 agent.json 后即可使用该凭据。下面的 clients 命令和热重载说明适用于原有直连模式。
+
 ## 创建并接入
 
 ```powershell

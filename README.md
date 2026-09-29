@@ -8,6 +8,10 @@ speed-probe 是一个通过 WebSocket 接收任务的网络质量测试后端。
 
 ## 环境要求
 
+家庭 NAS 可使用 `agent -config agent.json -scripts probe-scripts.json` 主动连接 VPS 控制端，无需开放端口；Docker 使用 `compose.agent.yaml`，详见 [部署指南](DOCKER.md)。传统 `server` 模式仍可用。
+
+Docker / TrueNAS / QNAP 部署见 [容器部署指南](DOCKER.md)。容器运行无需宿主机安装 Go；以下要求适用于源码构建。
+
 - Go 1.25.5 或更高版本
 - Bash 或 PowerShell
 - OpenSSL（可选，用于生成本地开发 TLS 证书）

@@ -1,0 +1,5 @@
+# Linux NAS override: use the host's network path for measurements.
+# docker compose -f compose.agent.yaml -f compose.agent.host.yaml up -d
+services:
+  probe:
+    network_mode: host

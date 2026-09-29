@@ -1,0 +1,9 @@
+{
+  "name": "家庭宽带",
+  "controller": "wss://probe.example.com/agent",
+  "capabilities": ["ping", "script", "topo", "speed"],
+  "max_nodes": 300,
+  "max_jobs": 2,
+  "max_seconds": 600,
+  "max_scripts": 32
+}

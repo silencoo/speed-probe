@@ -27,18 +27,27 @@ func (ips *IPStacks) Count() int {
 }
 
 type GeoInfo struct {
-	Org           string  `json:"organization"`
-	Lon           float32 `json:"longitude"`
-	Lat           float32 `json:"latitude"`
-	TimeZone      string  `json:"timezone"`
-	ISP           string  `json:"isp"`
-	ASN           int     `json:"asn"`
-	ASNOrg        string  `json:"asn_organization"`
-	Country       string  `json:"country"`
-	City          string  `json:"city"`
-	IP            string  `json:"ip"`
-	ContinentCode string  `json:"continent_code"`
-	CountryCode   string  `json:"country_code"`
+	Org           string   `json:"organization"`
+	Lon           float32  `json:"longitude"`
+	Lat           float32  `json:"latitude"`
+	TimeZone      string   `json:"timezone"`
+	ISP           string   `json:"isp"`
+	ASN           int      `json:"asn"`
+	ASNOrg        string   `json:"asn_organization"`
+	Country       string   `json:"country"`
+	City          string   `json:"city"`
+	IP            string   `json:"ip"`
+	ContinentCode string   `json:"continent_code"`
+	CountryCode   string   `json:"country_code"`
+	Region        string   `json:"region,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	QueriedAt     string   `json:"queried_at,omitempty"`
+	LookupStatus  string   `json:"lookup_status,omitempty"`
+	Cached        bool     `json:"cached,omitempty"`
+	Prefix        string   `json:"bgp_prefix,omitempty"`
+	RoutingASNs   []uint32 `json:"bgp_asns,omitempty"`
+	BGPSource     string   `json:"bgp_source,omitempty"`
+	BGPStatus     string   `json:"bgp_status,omitempty"`
 
 	StackType string `json:"stackType"`
 }

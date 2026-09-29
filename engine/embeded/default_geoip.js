@@ -16,8 +16,9 @@ function handler(ip) {
     return {
       ip:data.ip, country:data.country || data.country_name || "",
       countryCode:data.country_code, country_code:data.country_code,
-      city:data.city || "", continentCode:data.continent_code || "",
-      organization:org, isp:connection.isp || org,
+      city:data.city || "", region:data.region || "", continentCode:data.continent_code || "",
+      organization:org, isp:connection.isp || "",
+      source:i === 0 ? "ipwho.is" : "ipapi.co", lookup_status:"available",
       asn:parseAsn(connection.asn || data.asn), asnOrg:org, asn_organization:org,
       longitude:Number(data.longitude) || 0, latitude:Number(data.latitude) || 0,
       timezone:typeof data.timezone === "string" ? data.timezone : (data.timezone || {}).id || ""

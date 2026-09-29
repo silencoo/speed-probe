@@ -1,0 +1,24 @@
+# Home/NAS agent: no ports, certificates or inbound route required.
+services:
+  probe:
+    image: ${PROBE_IMAGE:-speed-probe:local}
+    build: .
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment:
+      TZ: ${TZ:-Asia/Tokyo}
+    volumes:
+      - ${PROBE_DATA_DIR:-./data}:/data
+    command: [agent, -config, /data/agent.json, -scripts, "${PROBE_SCRIPTS:-}"]
+    # Agent has no listening port. Online state is shown by /backend in the Bot.
+    healthcheck:
+      disable: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}

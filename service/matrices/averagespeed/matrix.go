@@ -10,6 +10,8 @@ type AverageSpeed struct {
 	TotalBytes    uint64
 	ElapsedMillis int64
 	StopReason    string
+	ErrorCode     string `json:",omitempty"`
+	HTTPCode      int    `json:",omitempty"`
 }
 
 func (m *AverageSpeed) Type() interfaces.SlaveRequestMatrixType {
@@ -26,5 +28,7 @@ func (m *AverageSpeed) Extract(entry interfaces.SlaveRequestMatrixEntry, macro i
 		m.TotalBytes = mac.TotalSize
 		m.ElapsedMillis = mac.ElapsedMillis
 		m.StopReason = mac.StopReason
+		m.ErrorCode = mac.ErrorCode
+		m.HTTPCode = mac.HTTPCode
 	}
 }

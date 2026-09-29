@@ -7,10 +7,11 @@ import (
 
 type RTTPing struct {
 	interfaces.RTTPingDS
-	Max      uint16
-	Attempts int
-	Failures int
-	HTTPCode int
+	Max       uint16
+	Attempts  int
+	Failures  int
+	HTTPCode  int
+	ErrorCode string `json:",omitempty"`
 }
 
 func (m *RTTPing) Type() interfaces.SlaveRequestMatrixType {
@@ -29,5 +30,6 @@ func (m *RTTPing) Extract(entry interfaces.SlaveRequestMatrixEntry, macro interf
 		m.Failures = mac.Failures
 		m.HTTPCode = mac.HTTPCode
 		m.StdDev = mac.RTTStd
+		m.ErrorCode = mac.ErrorCode
 	}
 }

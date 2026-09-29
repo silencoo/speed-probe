@@ -61,9 +61,10 @@ func Once(speed *Speed, proxy interfaces.Vendor, cfg *interfaces.SlaveRequestCon
 		limiter = rate.NewLimiter(rate.Limit(utils.GCFG.SpeedLimit), 32*1024)
 	}
 	var wg sync.WaitGroup
+	outcomes := make(chan downloadOutcome, cfg.DownloadThreading)
 	for i := uint(0); i < cfg.DownloadThreading; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); download(ctx, files, proxy, counter, b, limiter) }()
+		go func() { defer wg.Done(); outcomes <- download(ctx, files, proxy, counter, b, limiter) }()
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -103,8 +104,24 @@ loop:
 			break loop
 		}
 	}
+	windowError := ctx.Err()
+	if speed.StopReason == "source_exhausted" && windowError != nil {
+		speed.StopReason = "duration"
+		if windowError == context.Canceled {
+			speed.StopReason = "cancelled"
+		}
+	}
 	cancel()
 	<-done
+	close(outcomes)
+	for outcome := range outcomes {
+		if outcome.status != 0 && speed.ErrorCode == "" {
+			speed.HTTPCode = outcome.status
+		}
+		if speed.ErrorCode == "" && outcome.code != "cancelled" {
+			speed.ErrorCode = outcome.code
+		}
+	}
 	ended := time.Now()
 	sample(ended)
 	speed.ElapsedMillis = ended.Sub(started).Milliseconds()
@@ -115,22 +132,41 @@ loop:
 	if cfg.DownloadBytes > 0 && speed.TotalSize == cfg.DownloadBytes {
 		speed.StopReason = "byte_limit"
 	}
-	if speed.TotalSize == 0 && speed.StopReason == "source_exhausted" {
+	if speed.TotalSize == 0 && speed.StopReason != "cancelled" {
+		speed.StopReason = "download_error"
+		if speed.ErrorCode == "" {
+			if windowError != nil {
+				speed.ErrorCode = vendors.NetworkErrorCode(windowError)
+			} else {
+				speed.ErrorCode = "empty_response"
+			}
+		}
+	} else if speed.StopReason == "duration" || speed.StopReason == "byte_limit" || speed.StopReason == "cancelled" {
+		// Cancelling workers at the selected limit is normal completion.
+		speed.ErrorCode = ""
+	} else if speed.ErrorCode != "" {
 		speed.StopReason = "download_error"
 	}
 }
 
-func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *WriteCounter, b *budget, limiter *rate.Limiter) {
+type downloadOutcome struct {
+	code   string
+	status int
+}
+
+func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *WriteCounter, b *budget, limiter *rate.Limiter) (outcome downloadOutcome) {
 	if len(files) == 0 {
-		return
+		return downloadOutcome{code: "empty_response"}
 	}
 	for i := 0; ctx.Err() == nil; i++ {
 		resp, _, err := vendors.RequestUnsafe(ctx, proxy, &interfaces.RequestOptions{URL: files[i%len(files)], Network: interfaces.ROptionsTCP})
 		if err != nil {
-			return
+			return downloadOutcome{code: vendors.NetworkErrorCode(err)}
 		}
+		outcome.status = resp.StatusCode
 		if resp.StatusCode != 200 && resp.StatusCode != 206 {
 			resp.Body.Close()
+			outcome.code = "http_error"
 			return
 		}
 		received := 0
@@ -164,9 +200,15 @@ func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *
 		}
 		resp.Body.Close()
 		if received == 0 || (err != nil && err != io.EOF) {
+			if err != nil && err != io.EOF {
+				outcome.code = vendors.NetworkErrorCode(err)
+			} else {
+				outcome.code = "empty_response"
+			}
 			return
 		}
 	}
+	return
 }
 
 // Kept as a focused downloader entry point for cancellation tests.

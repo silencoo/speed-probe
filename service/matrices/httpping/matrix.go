@@ -7,11 +7,12 @@ import (
 
 type HTTPPing struct {
 	interfaces.HTTPPingDS
-	Max      uint16
-	Attempts int
-	Failures int
-	HTTPCode int
-	StdDev   uint16
+	Max       uint16
+	Attempts  int
+	Failures  int
+	HTTPCode  int
+	StdDev    uint16
+	ErrorCode string `json:",omitempty"`
 }
 
 func (m *HTTPPing) Type() interfaces.SlaveRequestMatrixType {
@@ -30,5 +31,6 @@ func (m *HTTPPing) Extract(entry interfaces.SlaveRequestMatrixEntry, macro inter
 		m.Failures = mac.Failures
 		m.HTTPCode = mac.HTTPCode
 		m.StdDev = mac.RequestStd
+		m.ErrorCode = mac.ErrorCode
 	}
 }

@@ -27,6 +27,8 @@ func RunCli() {
 
 	cmdName = path.Base(os.Args[0])
 	switch subCmd {
+	case "agent":
+		RunCliAgent()
 	case "clients":
 		RunCliClients()
 	case SCTMisc:
@@ -55,6 +57,7 @@ func RunCliDefault() {
 
 	fmt.Printf("\n")
 	fmt.Printf("Subcommands of %s:\n", cmdName)
+	fmt.Printf("  agent\n        connect to a controller without publishing a port.\n")
 	fmt.Printf("  clients\n        manage client credentials (add, list, set, revoke, rotate).\n")
 	fmt.Printf("  server\n")
 	fmt.Printf("        start the speed-probe backend as a server.\n")

@@ -82,6 +82,7 @@ func measure(m *Ping, p interfaces.Vendor, cfg interfaces.SlaveRequestConfigs) {
 		m.Attempts++
 		if err != nil {
 			m.Failures++
+			m.ErrorCode = vendors.NetworkErrorCode(err)
 			continue
 		}
 		m.HTTPCode = status

@@ -53,6 +53,7 @@ func RequestUnsafe(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.
 	// connect proxy bridge
 	// init params copied from http.DefaultTransport
 	transport := &http.Transport{
+		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       10 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
@@ -104,7 +105,11 @@ type responseBody struct {
 func (b *responseBody) Close() error { err := b.ReadCloser.Close(); b.cleanup(); return err }
 
 func Request(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.RequestOptions) (duration uint16, bodyBytes []byte, resp *http.Response, redirects []string) {
-	var err error
+	duration, bodyBytes, resp, redirects, _ = requestDetailed(ctx, p, reqOpt)
+	return
+}
+
+func requestDetailed(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.RequestOptions) (duration uint16, bodyBytes []byte, resp *http.Response, redirects []string, err error) {
 
 	start := time.Now()
 	resp, redirects, err = RequestUnsafe(ctx, p, reqOpt)
@@ -115,6 +120,9 @@ func Request(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.Reques
 
 	bodyBytes, err = io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
 	if err != nil || len(bodyBytes) > 8<<20 {
+		if err == nil {
+			err = ErrResponseTooLarge
+		}
 		bodyBytes, resp = nil, nil
 		return
 	}
@@ -124,17 +132,32 @@ func Request(ctx context.Context, p interfaces.Vendor, reqOpt *interfaces.Reques
 }
 
 func RequestWithRetry(p interfaces.Vendor, retry int, timeoutMillisecond int64, reqOpt *interfaces.RequestOptions) ([]byte, *http.Response, []string) {
+	body, resp, redirects, _ := RequestWithRetryDetailed(p, retry, timeoutMillisecond, reqOpt)
+	return body, resp, redirects
+}
+
+var ErrResponseTooLarge = errors.New("response exceeds body limit")
+
+// Detailed errors are opt-in for scripts; existing fetch(null) callers retain their contract.
+func RequestWithRetryDetailed(p interfaces.Vendor, retry int, timeoutMillisecond int64, reqOpt *interfaces.RequestOptions) ([]byte, *http.Response, []string, error) {
 	var resp *http.Response = nil
 	var retBody []byte = nil
 	var redirects = []string{}
+	var err error
+	timeoutMillisecond = structs.WithIn(timeoutMillisecond, 1, 30000)
 
 	for i := 0; resp == nil && i < structs.WithIn(retry, 1, 10) && Context(p).Err() == nil; i += 1 {
 		ctx, cancel := context.WithTimeout(Context(p), time.Duration(timeoutMillisecond)*time.Millisecond)
-		_, retBody, resp, redirects = Request(ctx, p, reqOpt)
+		_, retBody, resp, redirects, err = requestDetailed(ctx, p, reqOpt)
 		cancel()
+		if errors.Is(err, ErrResponseTooLarge) {
+			break
+		}
 	}
-
-	return retBody, resp, redirects
+	if resp == nil && Context(p).Err() != nil {
+		err = Context(p).Err()
+	}
+	return retBody, resp, redirects, err
 }
 
 func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, network interfaces.RequestOptionsNetwork) ([]byte, error) {

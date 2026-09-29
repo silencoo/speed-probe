@@ -1,5 +1,25 @@
 # speed-probe 协议 v3
 
+## 传输方向
+
+支持直连 `server` 和主动连接 `agent` 两种模式。下面的根路径及 HTTP 状态码说明适用于直连；主动连接由 NAS 向 Bot 的 `wss://域名/agent` 建立长连接，NAS 不监听端口。两种模式复用相同的 v3 命令、事件、执行器与配额检查。
+
+NAS 自注册：本地生成并持久化身份，未授权时向同一接入地址发送 `POST https://域名/agent`，携带 `Authorization: Bearer <agent token>` 和 `{"version":1,"id":"后端ID","name":"显示名"}`。202 表示待审核，200 表示已批准，403 表示已拒绝/撤销，409 表示 ID 冲突，429 表示限流/待审核队列已满。请求最多 4 KiB；控制端只保存令牌哈希。管理员核对日志指纹后批准；NAS 按重连退避重试，不自动获取任务权限。HTTP 注册禁止跟随重定向。
+
+批准后的主动连接握手使用 `Authorization: Bearer <agent token>`，Bot 验证令牌后等待能力帧：
+
+```json
+{"version":1,"type":"hello","id":"home","description":{"software_version":"...","supported":[],"allowed":[],"limits":{},"scripts":[],"cores":[]}}
+```
+
+示例 description 省略了实际字段值，实际需为完整有效的 v3 后端描述。id 必须匹配令牌身份。Bot 返回 `{"version":1,"type":"ready"}` 后开始收发任务；同一 ID 同时只允许一个连接，重复连接返回 409。
+
+长连接通过 32 位小写十六进制 `stream_id` 复用逻辑会话。Bot 发送 `{"version":1,"type":"open","stream_id":"..."}`，双方使用 `{"version":1,"type":"data","stream_id":"...","payload":{}}` 传输原 v3 命令/事件，任一方发送 `close` 关闭该会话。每个会话仍只执行一次 describe 或 run；取消通过该会话的 v3 cancel 传递。传输封装 version=1 与任务 protocol=3 独立。
+
+Bot 每 15 秒发送 WebSocket ping，agent 回复 pong；agent 在 45 秒无读活动后重连。重连采用带抖动的退避（基础间隔 1–30 秒），断线取消现有任务，不自动重放测速请求。并发任务由 NAS 本地 max_jobs 限制，旧任务实际退出才释放配额；逻辑会话最多 max_jobs+2，控制端队列另有数量和总字节上限。
+
+部署步骤见 [Docker 主动连接模式](DOCKER.md)。
+
 WSS 根路径 /，握手头 Authorization: Bearer TOKEN。无效凭据返回 HTTP 401，未使用 TLS 的远程 TCP 对端返回 403。令牌不得放在 URL 中。
 
 外层协议字段用 snake_case。检测请求和指标的已有字段保留 PascalCase，避免重写 Vendor/Macro/Matrix 引擎。每个连接用于一次 describe 或一个 run。命令与事件都包含 protocol: 3。
@@ -89,3 +109,11 @@ description 增加 cores 列表，每项包含 id、version、formats、features
 SPEED_AVERAGE payload 除 Value 外新增 TotalBytes、ElapsedMillis、StopReason。StopReason 为 duration、byte_limit、download_error、source_exhausted、cancelled。Value 是实际应用层正文量除以实际耗时（含建立连接）；仅 200／206 响应正文计入下载。SPEED_PER_SECOND 的最后一段可能不足一秒，该段按实际间隔归一化成 Byte/s。
 
 TEST_PING_CONN／TEST_PING_RTT payload 增加 Max、StdDev、Attempts、Failures、HTTPCode。每个采样新建连接，按 PingAverageOver 固定次数执行（取消除外），TaskTimeout 为每次采样超时，TaskRetry 不改变延迟样本数。RTT 字段在本版本表示建连耗时，HTTPS 包含 TLS 握手；HTTP Value 包含获取响应头的时间。延迟均值／标准差使用全部成功样本，不丢弃慢样本。Failures 表示网络请求失败，不表示 ICMP 丢包；HTTPCode 是最后一次成功收到的响应状态，403 等响应也代表网络可达。
+
+延迟矩阵还可携带 `ErrorCode`，表示最后一次失败采样的安全分类：`timeout`、`dns_error`、`tls_error`、`connection_refused`、`connection_reset`、`connection_closed`、`cancelled`、`network_error`。全部成功时省略；部分失败时仍保留成功样本统计。原始错误（可能含节点地址或凭据）不会回传。旧控制端可忽略此字段。
+
+下载矩阵 `SPEED_AVERAGE` 也可携带 `ErrorCode` 和 `HTTPCode`。错误分类包含上述网络错误及 `http_error`（非 200/206 响应）、`empty_response`（空正文）。全程零字节的超时标记为 `download_error` + `timeout`；已收到数据并到达时长或流量上限仍属于正常停止，用户取消仍为 `cancelled`。不会回传原始错误文本或错误响应正文。
+
+## 脚本检测状态
+
+TEST_SCRIPT payload 保留 `Key`、`Text`、`Color`、`Background`、`TimeElapsed`，新增可选 `Status`，透传脚本返回对象的 `status`。自带脚本使用 `reachable`、`restricted`、`unknown`、`challenge`、`rate_limited`、`network_error`；脚本异常/超时返回 `network_error` 和相应说明文本。纯字符串脚本不生成 Status，兼容旧脚本与旧 v3 客户端。控制端优先按语义状态显示结果，不从背景色推断检测结论。此扩展不改变 v3 认证，已有 Token 无需重新签发。

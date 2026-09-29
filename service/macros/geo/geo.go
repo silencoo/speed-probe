@@ -36,7 +36,9 @@ func DetectingSource(p interfaces.Vendor, script string, retry int, queryServers
 
 		outIpstacks := RemoteLookup(p, script, retry)
 		for _, outv6Ip := range outIpstacks.IPv6 {
-			if outv6 := RunGeoCheck(p, script, outv6Ip, retry, interfaces.ROptionsTCP6); outv6 != nil {
+			// The queried address is IPv6; the metadata API itself may be IPv4-only.
+			// Keep the selected proxy but let its transport choose the API address family.
+			if outv6 := RunGeoCheck(p, script, outv6Ip, retry, interfaces.ROptionsTCP); outv6 != nil {
 				out.IPv6Stack = append(out.IPv6Stack, outv6)
 				out.MainStack = outv6
 			}

@@ -9,6 +9,8 @@ type Speed struct {
 	Speeds        []uint64
 	ElapsedMillis int64
 	StopReason    string
+	ErrorCode     string
+	HTTPCode      int
 }
 
 func (m *Speed) Type() interfaces.SlaveRequestMacroType {

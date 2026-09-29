@@ -1,0 +1,37 @@
+# Standalone NAS backend. Configure trusted TLS certificates before starting.
+services:
+  probe:
+    image: ${PROBE_IMAGE:-speed-probe:local}
+    build: .
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment:
+      TZ: ${TZ:-Asia/Tokyo}
+    ports:
+      - "${PROBE_BIND_IP:-0.0.0.0}:${PROBE_PORT:-8765}:8765"
+    volumes:
+      - ${PROBE_DATA_DIR:-./data}:/data
+    command:
+      - server
+      - -bind
+      - 0.0.0.0:8765
+      - -clients
+      - /data/clients.json
+      - -scripts
+      - /data/probe-scripts.json
+      - -tls
+      - -tls-cert
+      - /data/tls/fullchain.pem
+      - -tls-key
+      - /data/tls/privkey.pem
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs: [/tmp]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

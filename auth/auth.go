@@ -194,6 +194,7 @@ func (c Client) Allows(req *interfaces.SlaveRequest) error {
 // Snapshot reloads on atomic file replacement. Invalid updates fail closed.
 type Manager struct {
 	Path    string
+	static  bool
 	mu      sync.Mutex
 	info    os.FileInfo
 	clients map[string]Client
@@ -201,21 +202,31 @@ type Manager struct {
 }
 
 func NewManager(path string) *Manager { return &Manager{Path: path, active: map[string]int{}} }
-func (m *Manager) currentLocked(id string) (Client, error) {
-	info, err := os.Stat(m.Path)
-	if err != nil {
-		return Client{}, errors.New("client store unavailable")
+
+// NewStaticManager enforces the operator's local agent policy across reconnects.
+func NewStaticManager(client Client) (*Manager, error) {
+	if err := ValidateClient(client); err != nil {
+		return nil, err
 	}
-	if m.info == nil || !os.SameFile(info, m.info) || info.ModTime() != m.info.ModTime() || info.Size() != m.info.Size() {
-		s, err := Load(m.Path)
+	return &Manager{static: true, clients: map[string]Client{client.ID: client}, active: map[string]int{}}, nil
+}
+func (m *Manager) currentLocked(id string) (Client, error) {
+	if !m.static {
+		info, err := os.Stat(m.Path)
 		if err != nil {
 			return Client{}, errors.New("client store unavailable")
 		}
-		m.clients = map[string]Client{}
-		for _, c := range s.Clients {
-			m.clients[c.ID] = c
+		if m.info == nil || !os.SameFile(info, m.info) || info.ModTime() != m.info.ModTime() || info.Size() != m.info.Size() {
+			s, err := Load(m.Path)
+			if err != nil {
+				return Client{}, errors.New("client store unavailable")
+			}
+			m.clients = map[string]Client{}
+			for _, c := range s.Clients {
+				m.clients[c.ID] = c
+			}
+			m.info = info
 		}
-		m.info = info
 	}
 	c, ok := m.clients[id]
 	if !ok || c.Disabled {

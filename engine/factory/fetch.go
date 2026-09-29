@@ -16,12 +16,16 @@ func FetchFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.Requ
 		body := ""
 		useHost := false
 		noRedir := false
+		detailed := false
 		retry := 0
 		timeout := int64(3000)
 		headers := map[string]string{}
 		cookies := map[string]string{}
 
 		if params != nil {
+			if v, ok := helpers.VMSafeBool(params.Get("detailed")); ok {
+				detailed = v
+			}
 			if v, ok := helpers.VMSafeStr(params.Get("method")); ok {
 				method = v
 			}
@@ -60,7 +64,7 @@ func FetchFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.Requ
 		if useHost {
 			target = vendors.WithContext(vendors.Context(p), nil)
 		}
-		retBody, resp, redirs := vendors.RequestWithRetry(target, retry, timeout, &interfaces.RequestOptions{
+		retBody, resp, redirs, requestErr := vendors.RequestWithRetryDetailed(target, retry, timeout, &interfaces.RequestOptions{
 			Method:  method,
 			URL:     url,
 			Headers: headers,
@@ -88,6 +92,9 @@ func FetchFactory(vm *goja.Runtime, p interfaces.Vendor, network interfaces.Requ
 		}
 
 		if retMap == nil {
+			if detailed {
+				return vm.ToValue(map[string]interface{}{"statusCode": 0, "body": "", "errorCode": vendors.NetworkErrorCode(requestErr)})
+			}
 			return goja.Null()
 		} else {
 			return vm.ToValue(retMap)
