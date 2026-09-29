@@ -9,11 +9,13 @@ import (
 	"github.com/silencoo/speed-probe/service/macros/script"
 	"github.com/silencoo/speed-probe/service/macros/speed"
 	"github.com/silencoo/speed-probe/service/macros/udp"
+	"github.com/silencoo/speed-probe/service/macros/upload"
 
 	"github.com/silencoo/speed-probe/service/macros/invalid"
 )
 
 var registeredList = map[interfaces.SlaveRequestMacroType]func() interfaces.SlaveRequestMacro{
+	interfaces.MacroUpload: func() interfaces.SlaveRequestMacro { return &upload.Upload{} },
 	interfaces.MacroSpeed: func() interfaces.SlaveRequestMacro {
 		return &speed.Speed{}
 	},

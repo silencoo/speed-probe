@@ -130,9 +130,17 @@ func ServeSession(parent context.Context, conn ProtocolConnection, manager *auth
 		poll = SpeedTaskPoll
 	}
 	// One progress event per node plus one terminal event; no socket writes in workers.
-	events := make(chan Event, len(req.Nodes)+1)
+	events := make(chan Event, len(req.Nodes)*32+1)
 	internalID := utils.RandomUUID()
 	item := (&TestingPollItem{id: internalID, name: cmd.TaskID, ctx: ctx, cancel: cancel, request: req, matrices: req.Options.Matrices, macros: macroTypes,
+		onStage: func(index int, stage string, active bool) {
+			if req.Configs.StageProgress {
+				select {
+				case events <- Event{Type: "stage", TaskID: cmd.TaskID, Index: index, Stage: stage, Active: active}:
+				case <-ctx.Done():
+				}
+			}
+		},
 		authorize: func() error { return manager.StillAllowed(client, policyRequest) },
 		onProcess: func(t *TestingPollItem, index int, result interfaces.SlaveEntrySlot) {
 			events <- Event{Type: "progress", TaskID: cmd.TaskID, State: "running", Record: &result, Queuing: poll.AwaitingCount()}

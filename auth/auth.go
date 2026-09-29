@@ -158,7 +158,7 @@ func Required(req *interfaces.SlaveRequest) ([]string, error) {
 			cap = "script"
 		case interfaces.MatrixInboundGeoIP, interfaces.MatrixOutboundGeoIP:
 			cap = "topo"
-		case interfaces.MatrixAverageSpeed, interfaces.MatrixMaxSpeed, interfaces.MatrixPerSecondSpeed:
+		case interfaces.MatrixAverageSpeed, interfaces.MatrixMaxSpeed, interfaces.MatrixPerSecondSpeed, interfaces.MatrixUploadSpeed:
 			cap = "speed"
 		default:
 			return nil, errors.New("unknown test type")

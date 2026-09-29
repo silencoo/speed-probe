@@ -3,6 +3,8 @@ package speed
 import "github.com/silencoo/speed-probe/interfaces"
 
 type Speed struct {
+	SourceHealth  string
+	ErrorPhase    string
 	AvgSpeed      uint64
 	MaxSpeed      uint64
 	TotalSize     uint64

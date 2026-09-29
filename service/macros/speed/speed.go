@@ -5,6 +5,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/silencoo/speed-probe/interfaces"
 	"github.com/silencoo/speed-probe/preconfigs"
+	"github.com/silencoo/speed-probe/service/macros/sourcecheck"
 	"github.com/silencoo/speed-probe/utils"
 	"github.com/silencoo/speed-probe/vendors"
 	"golang.org/x/time/rate"
@@ -49,6 +50,10 @@ func (b *budget) commit(reserved, n int) {
 }
 
 func Once(speed *Speed, proxy interfaces.Vendor, cfg *interfaces.SlaveRequestConfigs) {
+	vendors.Report(proxy, "download_check", true)
+	defer vendors.Report(proxy, "download_check", false)
+	defer vendors.Report(proxy, "download", false)
+	gate := sourcecheck.New()
 	started := time.Now()
 	ctx, cancel := context.WithTimeout(vendors.Context(proxy), time.Duration(cfg.DownloadDuration)*time.Second)
 	defer cancel()
@@ -64,7 +69,23 @@ func Once(speed *Speed, proxy interfaces.Vendor, cfg *interfaces.SlaveRequestCon
 	outcomes := make(chan downloadOutcome, cfg.DownloadThreading)
 	for i := uint(0); i < cfg.DownloadThreading; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); outcomes <- download(ctx, files, proxy, counter, b, limiter) }()
+		go func(first bool) {
+			defer wg.Done()
+			if first {
+				defer gate.Close()
+			} else if !gate.Wait(ctx) {
+				outcomes <- downloadOutcome{}
+				return
+			}
+			ready := func() {
+				if first && !gate.Passed() {
+					gate.Pass()
+					vendors.Report(proxy, "download_check", false)
+					vendors.Report(proxy, "download", true)
+				}
+			}
+			outcomes <- download(ctx, files, proxy, counter, b, limiter, ready)
+		}(i == 0)
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
@@ -128,6 +149,10 @@ loop:
 	if speed.TotalSize > 0 {
 		speed.AvgSpeed = uint64(float64(speed.TotalSize) / ended.Sub(started).Seconds())
 	}
+	speed.SourceHealth = "passed"
+	if !gate.Passed() {
+		speed.SourceHealth = "failed"
+	}
 	// A completed last reader may win the select over the budget signal.
 	if cfg.DownloadBytes > 0 && speed.TotalSize == cfg.DownloadBytes {
 		speed.StopReason = "byte_limit"
@@ -141,11 +166,17 @@ loop:
 				speed.ErrorCode = "empty_response"
 			}
 		}
-	} else if speed.StopReason == "duration" || speed.StopReason == "byte_limit" || speed.StopReason == "cancelled" {
+	} else if (speed.StopReason == "duration" || speed.StopReason == "byte_limit" || speed.StopReason == "cancelled") && (speed.ErrorCode == "" || speed.ErrorCode == "timeout" || speed.ErrorCode == "network_error") {
 		// Cancelling workers at the selected limit is normal completion.
 		speed.ErrorCode = ""
 	} else if speed.ErrorCode != "" {
 		speed.StopReason = "download_error"
+	}
+	if speed.ErrorCode != "" {
+		speed.ErrorPhase = "transfer"
+		if !gate.Passed() {
+			speed.ErrorPhase = "source_check"
+		}
 	}
 }
 
@@ -154,12 +185,12 @@ type downloadOutcome struct {
 	status int
 }
 
-func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *WriteCounter, b *budget, limiter *rate.Limiter) (outcome downloadOutcome) {
+func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *WriteCounter, b *budget, limiter *rate.Limiter, ready func()) (outcome downloadOutcome) {
 	if len(files) == 0 {
 		return downloadOutcome{code: "empty_response"}
 	}
 	for i := 0; ctx.Err() == nil; i++ {
-		resp, _, err := vendors.RequestUnsafe(ctx, proxy, &interfaces.RequestOptions{URL: files[i%len(files)], Network: interfaces.ROptionsTCP})
+		resp, _, err := vendors.RequestUnsafe(ctx, proxy, &interfaces.RequestOptions{URL: files[i%len(files)], Network: interfaces.ROptionsTCP, NoRedir: true})
 		if err != nil {
 			return downloadOutcome{code: vendors.NetworkErrorCode(err)}
 		}
@@ -167,7 +198,14 @@ func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *
 		if resp.StatusCode != 200 && resp.StatusCode != 206 {
 			resp.Body.Close()
 			outcome.code = "http_error"
+			if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				outcome.code = "source_redirect"
+			}
 			return
+		}
+		if sourcecheck.InvalidContent(resp.Header.Get("Content-Type"), nil) {
+			resp.Body.Close()
+			return downloadOutcome{code: "invalid_content", status: resp.StatusCode}
 		}
 		received := 0
 		buf := make([]byte, 32*1024)
@@ -188,7 +226,25 @@ func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *
 					break
 				}
 			}
-			n, readErr := resp.Body.Read(buf[:size])
+			var n int
+			var readErr error
+			if received == 0 {
+				// Inspect a bounded prefix even when HTML arrives in tiny TCP reads.
+				n, readErr = io.ReadAtLeast(resp.Body, buf[:size], min(size, 512))
+				if readErr == io.ErrUnexpectedEOF {
+					readErr = io.EOF
+				}
+			} else {
+				n, readErr = resp.Body.Read(buf[:size])
+			}
+			if received == 0 && sourcecheck.InvalidContent("", buf[:n]) {
+				b.commit(size, n)
+				resp.Body.Close()
+				return downloadOutcome{code: "invalid_content", status: resp.StatusCode}
+			}
+			if n > 0 && ready != nil {
+				ready()
+			}
 			// Count before signaling budget exhaustion; final collection waits for workers.
 			wc.Write(buf[:n])
 			b.commit(size, n)
@@ -199,6 +255,17 @@ func download(ctx context.Context, files []string, proxy interfaces.Vendor, wc *
 			}
 		}
 		resp.Body.Close()
+		if received == 0 && err == nil {
+			// Another worker may finish the shared budget before this reader starts.
+			// That is not an empty response from the endpoint.
+			select {
+			case <-b.exhausted:
+				return
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
 		if received == 0 || (err != nil && err != io.EOF) {
 			if err != nil && err != io.EOF {
 				outcome.code = vendors.NetworkErrorCode(err)
@@ -221,7 +288,7 @@ func SingleThread(files []string, proxy interfaces.Vendor, seconds int64, wc *Wr
 		if wc.RateLimit > 0 {
 			limiter = rate.NewLimiter(rate.Limit(wc.RateLimit), 32*1024)
 		}
-		download(ctx, files, proxy, wc, &budget{exhausted: make(chan struct{})}, limiter)
+		download(ctx, files, proxy, wc, &budget{exhausted: make(chan struct{})}, limiter, nil)
 	}()
 	return func() { cancel(); <-done }
 }

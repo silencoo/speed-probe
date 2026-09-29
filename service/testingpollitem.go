@@ -23,6 +23,7 @@ type TestingPollItem struct {
 	macros    []interfaces.SlaveRequestMacroType
 	results   *structs.AsyncArr[interfaces.SlaveEntrySlot]
 	onProcess func(*TestingPollItem, int, interfaces.SlaveEntrySlot)
+	onStage   func(int, string, bool)
 	onExit    func(*TestingPollItem, taskpoll.TaskPollExitCode)
 	exitOnce  sync.Once
 	authorize func() error
@@ -57,7 +58,18 @@ func (t *TestingPollItem) Yield(idx int, p *taskpoll.TaskPollController) {
 		t.results.Push(result)
 		t.onProcess(t, idx, result)
 	}()
-	base := vendors.Build(t.ctx, t.request.Vendor, node.Name, node.Payload)
+	ctx := vendors.WithProgress(t.ctx, func(stage string, active bool) {
+		if t.onStage != nil {
+			t.onStage(idx, stage, active)
+		}
+	})
+	if t.onStage != nil {
+		t.onStage(idx, "connecting", true)
+	}
+	base := vendors.Build(ctx, t.request.Vendor, node.Name, node.Payload)
+	if t.onStage != nil {
+		t.onStage(idx, "connecting", false)
+	}
 	if closer, ok := base.(interface{ Close() error }); ok {
 		defer closer.Close()
 	}
@@ -65,16 +77,37 @@ func (t *TestingPollItem) Yield(idx int, p *taskpoll.TaskPollController) {
 		result.Error = "Node configuration is invalid or unsupported by the selected core"
 		return
 	}
-	proxy := vendors.WithContext(t.ctx, base)
+	proxy := vendors.WithContext(ctx, base)
 	result.ProxyInfo = proxy.ProxyInfo()
 	macroMap := structs.NewAsyncMap[interfaces.SlaveRequestMacroType, interfaces.SlaveRequestMacro]()
 	start := time.Now()
 	var wg sync.WaitGroup
+	// Keep upload and download in separate measurement windows for this node.
+	downloadDone := make(chan struct{})
+	hasDownload := false
+	for _, kind := range t.macros {
+		if kind == interfaces.MacroSpeed {
+			hasDownload = true
+		}
+	}
+	if !hasDownload {
+		close(downloadDone)
+	}
 	for _, kind := range t.macros {
 		kind := kind
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if kind == interfaces.MacroSpeed {
+				defer close(downloadDone)
+			}
+			if kind == interfaces.MacroUpload {
+				select {
+				case <-downloadDone:
+				case <-t.ctx.Done():
+					return
+				}
+			}
 			defer func() {
 				if recover() != nil {
 					t.cancel(&Failure{"execution_failed", "Test execution failed"})
@@ -84,6 +117,11 @@ func (t *TestingPollItem) Yield(idx int, p *taskpoll.TaskPollController) {
 				return
 			}
 			m := macros.Find(kind)
+			stage := map[interfaces.SlaveRequestMacroType]string{interfaces.MacroPing: "ping", interfaces.MacroUDP: "udp", interfaces.MacroGeo: "geo", interfaces.MacroScript: "script"}[kind]
+			if stage != "" {
+				vendors.Report(proxy, stage, true)
+				defer vendors.Report(proxy, stage, false)
+			}
 			if err := m.Run(proxy, t.request); err != nil {
 				t.cancel(&Failure{"execution_failed", "Test execution failed"})
 				return

@@ -4,6 +4,7 @@ type SlaveRequestMatrixType string
 
 const (
 	MatrixAverageSpeed   SlaveRequestMatrixType = "SPEED_AVERAGE"
+	MatrixUploadSpeed    SlaveRequestMatrixType = "UPLOAD_SPEED"
 	MatrixMaxSpeed       SlaveRequestMatrixType = "SPEED_MAX"
 	MatrixPerSecondSpeed SlaveRequestMatrixType = "SPEED_PER_SECOND"
 
@@ -25,7 +26,7 @@ func (srmt *SlaveRequestMatrixType) Valid() bool {
 	}
 
 	switch *srmt {
-	case MatrixAverageSpeed, MatrixMaxSpeed, MatrixPerSecondSpeed,
+	case MatrixAverageSpeed, MatrixMaxSpeed, MatrixPerSecondSpeed, MatrixUploadSpeed,
 		MatrixUDPType,
 		MatrixInboundGeoIP, MatrixOutboundGeoIP,
 		MatrixScriptTest, MatrixHTTPPing, MatrixRTTPing:

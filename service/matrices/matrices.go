@@ -14,9 +14,11 @@ import (
 	"github.com/silencoo/speed-probe/service/matrices/rttping"
 	"github.com/silencoo/speed-probe/service/matrices/scripttest"
 	"github.com/silencoo/speed-probe/service/matrices/udptype"
+	"github.com/silencoo/speed-probe/service/matrices/uploadspeed"
 )
 
 var registeredList = map[interfaces.SlaveRequestMatrixType]func() interfaces.SlaveRequestMatrix{
+	interfaces.MatrixUploadSpeed: func() interfaces.SlaveRequestMatrix { return &uploadspeed.UploadSpeed{} },
 	interfaces.MatrixHTTPPing: func() interfaces.SlaveRequestMatrix {
 		return &httpping.HTTPPing{}
 	},

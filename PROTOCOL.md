@@ -1,5 +1,17 @@
 # speed-probe 协议 v3
 
+## 上传测速扩展
+
+`describe.features` 包含 `upload_speed` 时支持 `UPLOAD_SPEED` matrix，所需权限为 `speed`，也受禁用速度测试、速度任务队列、任务取消和任务时限约束。旧令牌无需轮换。
+
+`Configs.UploadURL` 指定 HTTP(S) POST 接收端，默认 `https://speed.cloudflare.com/__up`。它与下载 URL 分开；端点应完整读取二进制正文后返回 2xx，不跟随重定向。`DownloadThreading`、`DownloadDuration`、`DownloadBytes` 这三个已有字段同时作为每节点**每方向**的连接数、秒数、正文预算，上传独立消耗预算。同一节点同时请求两种速度时先下载、后上传，上传时限从上传开始计。
+
+`UPLOAD_SPEED.Payload` 为 JSON 字符串，包含 `Value`（平均 B/s）、`Max`（区间峰值 B/s）、`Speeds`（按秒区间的 B/s）、`TotalBytes`（成功完整 POST 的正文量）、`SentBytes`（交给 HTTP 传输层的正文量，包括未确认/失败部分）、`ElapsedMillis`、`StopReason`、可选 `ErrorCode` 和 `HTTPCode`。
+
+平均值为 `TotalBytes / 实际窗口秒数`，包含连接和响应等待；失败或截止时尚未完成的请求不计入速度。`SentBytes` 不等于远端确认字节，也不含 TLS/TCP 等开销。所有工作线程共用正文预算和服务端配置的速度限制。请求块自适应为 16 KiB–4 MiB；曲线将成功块按请求持续时间分配到秒区间，不表示 TCP ACK 级瞬时速度，极短尾区间不参与峰值计算。
+
+停止原因：`duration`、`byte_limit`、`cancelled`、`upload_error`。错误仅返回稳定代码（网络错误代码、`http_error`、`incomplete_upload`、`invalid_url`、`invalid_options`），不回传目标 URL、响应正文或节点凭据。无成功请求的超时为失败，有成功数据的正常到时保留结果。部分工作线程失败也保留已确认数据，同时标明错误。
+
 ## 传输方向
 
 支持直连 `server` 和主动连接 `agent` 两种模式。下面的根路径及 HTTP 状态码说明适用于直连；主动连接由 NAS 向 Bot 的 `wss://域名/agent` 建立长连接，NAS 不监听端口。两种模式复用相同的 v3 命令、事件、执行器与配额检查。
@@ -123,3 +135,11 @@ TEST_PING_CONN／TEST_PING_RTT payload 增加 Max、StdDev、Attempts、Failures
 ## 脚本检测状态
 
 TEST_SCRIPT payload 保留 `Key`、`Text`、`Color`、`Background`、`TimeElapsed`，新增可选 `Status`，透传脚本返回对象的 `status`。自带脚本使用 `reachable`、`restricted`、`unknown`、`challenge`、`rate_limited`、`network_error`；脚本异常/超时返回 `network_error` 和相应说明文本。纯字符串脚本不生成 Status，兼容旧脚本与旧 v3 客户端。控制端优先按语义状态显示结果，不从背景色推断检测结论。此扩展不改变 v3 认证，已有 Token 无需重新签发。
+
+## 测速源预检和阶段进度
+
+`source_health` 表示先以一个连接检查当前目标，再启动其他测速连接。下载要求 200/206、有正文且不是 HTML/JSON/XML 错误页；上传要求完整发送且收到有效 2xx 确认（可为空或正常 JSON）。重定向不自动跟随，返回 `source_redirect`；错误内容返回 `invalid_content`。预检和正式传输共享时间、流量预算，有效预检数据计入结果。后续请求失败仍保留失败原因及已完成数据。
+
+`SPEED_AVERAGE` 和 `UPLOAD_SPEED` 新增 `SourceHealth=passed/failed`，错误时新增 `ErrorPhase=source_check/transfer`。这些状态只描述当前节点到当前测速目标的检测结果，不能单独判定节点是否可用。响应正文和原始网络错误不回传。
+
+声明 `stage_progress` 的后端允许 `Configs.StageProgress=true`；未启用时绝不发送阶段事件，以兼容旧控制端。启用后 accepted 与 finished 之间可发送 `type=stage`，包含 `index`（零基，省略表示 0）、`stage`、布尔 `active`。阶段为 connecting（准备内核）、download_check、download、upload_check、upload、ping、udp、geo、script；各独立项目可同时活跃，同类脚本合并为一个 script 阶段。节点 progress 和 finished 结束其所有活跃阶段。阶段事件仅表示当前操作，不携带百分比、地址或凭据，不增加已完成节点数。

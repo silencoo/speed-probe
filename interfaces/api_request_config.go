@@ -6,6 +6,8 @@ import (
 )
 
 type SlaveRequestConfigs struct {
+	StageProgress     bool   `json:",omitempty" yaml:"-"`
+	UploadURL         string `yaml:"uploadURL,omitempty"`
 	STUNURL           string `yaml:"stunURL,omitempty" cf:"name=🫙 STUN 地址"`
 	DownloadURL       string `yaml:"downloadURL,omitempty" cf:"name=📃 测速文件"`
 	DownloadDuration  int64  `yaml:"downloadDuration,omitempty" cf:"name=⏱️ 测速时长 (单位: 秒)"`
@@ -33,6 +35,8 @@ func (src *SlaveRequestConfigs) DescriptionText() string {
 
 func (src *SlaveRequestConfigs) Clone() *SlaveRequestConfigs {
 	return &SlaveRequestConfigs{
+		StageProgress:     src.StageProgress,
+		UploadURL:         src.UploadURL,
 		STUNURL:           src.STUNURL,
 		DownloadURL:       src.DownloadURL,
 		DownloadDuration:  src.DownloadDuration,
@@ -52,6 +56,10 @@ func (src *SlaveRequestConfigs) Clone() *SlaveRequestConfigs {
 
 func (src *SlaveRequestConfigs) Merge(from *SlaveRequestConfigs) *SlaveRequestConfigs {
 	ret := src.Clone()
+	ret.StageProgress = from.StageProgress
+	if from.UploadURL != "" {
+		ret.UploadURL = from.UploadURL
+	}
 	if from.STUNURL != "" {
 		ret.STUNURL = from.STUNURL
 	}
@@ -104,6 +112,9 @@ func (cfg *SlaveRequestConfigs) Check() *SlaveRequestConfigs {
 	}
 	if cfg.DownloadURL == "" {
 		cfg.DownloadURL = preconfigs.SPEED_DEFAULT_LARGE_FILE_DEFAULT
+	}
+	if cfg.UploadURL == "" {
+		cfg.UploadURL = "https://speed.cloudflare.com/__up"
 	}
 	if cfg.DownloadDuration < 1 || cfg.DownloadDuration > 30 {
 		cfg.DownloadDuration = preconfigs.SPEED_DEFAULT_DURATION

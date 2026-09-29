@@ -6,6 +6,8 @@ import (
 )
 
 type AverageSpeed struct {
+	SourceHealth string
+	ErrorPhase   string `json:",omitempty"`
 	interfaces.AverageSpeedDS
 	TotalBytes    uint64
 	ElapsedMillis int64
@@ -24,6 +26,7 @@ func (m *AverageSpeed) MacroJob() interfaces.SlaveRequestMacroType {
 
 func (m *AverageSpeed) Extract(entry interfaces.SlaveRequestMatrixEntry, macro interfaces.SlaveRequestMacro) {
 	if mac, ok := macro.(*speed.Speed); ok {
+		m.SourceHealth, m.ErrorPhase = mac.SourceHealth, mac.ErrorPhase
 		m.Value = mac.AvgSpeed
 		m.TotalBytes = mac.TotalSize
 		m.ElapsedMillis = mac.ElapsedMillis

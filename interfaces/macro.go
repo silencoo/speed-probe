@@ -3,7 +3,8 @@ package interfaces
 type SlaveRequestMacroType string
 
 const (
-	MacroSpeed SlaveRequestMacroType = "SPEED"
+	MacroSpeed  SlaveRequestMacroType = "SPEED"
+	MacroUpload SlaveRequestMacroType = "UPLOAD"
 
 	MacroPing   SlaveRequestMacroType = "PING"
 	MacroUDP    SlaveRequestMacroType = "UDP"
