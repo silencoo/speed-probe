@@ -40,6 +40,16 @@ func (s *SingBox) Build(name, payload string) interfaces.Vendor {
 	return s.BuildContext(context.Background(), name, payload)
 }
 func (s *SingBox) BuildContext(ctx context.Context, name, payload string) interfaces.Vendor {
+	return s.build(ctx, name, []string{payload}, payload, false)
+}
+func (s *SingBox) BuildPathContext(ctx context.Context, path *interfaces.TestPath) interfaces.Vendor {
+	payloads, err := path.Compile(false)
+	if err != nil {
+		return s
+	}
+	return s.build(ctx, path.Name, payloads, path.Hops[len(path.Hops)-1].Payload, true)
+}
+func (s *SingBox) build(ctx context.Context, name string, payloads []string, infoPayload string, chain bool) interfaces.Vendor {
 	s.info.Name = name
 	registry := include.OutboundRegistry()
 	// Include QUIC outbounds in ordinary builds too (upstream include uses build tags).
@@ -48,17 +58,22 @@ func (s *SingBox) BuildContext(ctx context.Context, name, payload string) interf
 	tuic.RegisterOutbound(registry)
 	ctx = box.Context(ctx, include.InboundRegistry(), registry, include.EndpointRegistry(),
 		include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
-	var outbound option.Outbound
-	if err := json.UnmarshalContext(ctx, []byte(payload), &outbound); err != nil {
-		return s
+	outbounds := make([]option.Outbound, len(payloads))
+	for i, payload := range payloads {
+		if err := json.UnmarshalContext(ctx, []byte(payload), &outbounds[i]); err != nil {
+			return s
+		}
+		// A node must be a standalone outbound, not a selector or other routing control.
+		switch outbounds[i].Type {
+		case "selector", "urltest", "block", "dns", "bridge", "wireguard", "shadowsocksr":
+			return s
+		}
+		if !chain {
+			outbounds[i].Tag = "test"
+		}
 	}
-	// A node must be a standalone outbound, not a selector or other routing control.
-	switch outbound.Type {
-	case "selector", "urltest", "block", "dns", "bridge", "wireguard", "shadowsocksr":
-		return s
-	}
-	outbound.Tag = "test"
-	opts := option.Options{Log: &option.LogOptions{Disabled: true}, Outbounds: []option.Outbound{outbound}}
+	final := outbounds[len(outbounds)-1].Tag
+	opts := option.Options{Log: &option.LogOptions{Disabled: true}, Outbounds: outbounds, Route: &option.RouteOptions{Final: final}}
 	instance, err := box.New(box.Options{Context: ctx, Options: opts})
 	if err != nil {
 		return s
@@ -68,14 +83,14 @@ func (s *SingBox) BuildContext(ctx context.Context, name, payload string) interf
 		s.Close()
 		return s
 	}
-	s.outbound, _ = instance.Outbound().Outbound("test")
+	s.outbound, _ = instance.Outbound().Outbound(final)
 	var raw struct {
 		Server string `json:"server"`
 		Port   uint16 `json:"server_port"`
 	}
-	_ = json.Unmarshal([]byte(payload), &raw)
+	_ = json.Unmarshal([]byte(infoPayload), &raw)
 	s.info.Address = net.JoinHostPort(raw.Server, strconv.Itoa(int(raw.Port)))
-	s.info.Type = interfaces.ProxyType(outbound.Type)
+	s.info.Type = interfaces.ProxyType(outbounds[len(outbounds)-1].Type)
 	return s
 }
 func destination(raw string) (M.Socksaddr, error) {

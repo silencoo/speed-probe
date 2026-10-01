@@ -50,7 +50,7 @@ type CoreInfo struct {
 }
 
 func coreInfo() []CoreInfo {
-	cores := []CoreInfo{{"Mihomo", "unknown", []string{"mihomo"}, []string{"quic", "utls"}}, {"SingBox", "unknown", []string{"sing-box"}, []string{"quic"}}}
+	cores := []CoreInfo{{"Mihomo", "unknown", []string{"mihomo"}, []string{"quic", "utls"}}, {"SingBox", "unknown", []string{"sing-box"}, []string{"quic", "chain_paths", "exit_verification"}}}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, dep := range info.Deps {
 			if dep.Path == "github.com/metacubex/mihomo" {
@@ -193,5 +193,5 @@ func (c ScriptCatalog) Describe(client auth.Client) Description {
 			list = append(list, ScriptInfo{s.ID, s.Type})
 		}
 	}
-	return Description{Features: []string{"download_budget", "measurement_details", "upload_speed", "stage_progress", "source_health"}, SoftwareVersion: utils.VERSION, Supported: append([]string{}, auth.Capabilities...), Allowed: allowed, Limits: Limits{client.MaxNodes, client.MaxJobs, client.MaxSeconds, client.MaxScripts}, Scripts: list, Cores: coreInfo()}
+	return Description{Features: []string{"chain_paths", "exit_verification", "download_budget", "measurement_details", "upload_speed", "stage_progress", "source_health"}, SoftwareVersion: utils.VERSION, Supported: append([]string{}, auth.Capabilities...), Allowed: allowed, Limits: Limits{client.MaxNodes, client.MaxJobs, client.MaxSeconds, client.MaxScripts}, Scripts: list, Cores: coreInfo()}
 }

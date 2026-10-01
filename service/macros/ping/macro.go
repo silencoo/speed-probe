@@ -5,16 +5,20 @@ import (
 )
 
 type Ping struct {
-	RTT        uint16
-	Request    uint16
-	RTTStd     uint16
-	RTTMax     uint16
-	RequestStd uint16
-	RequestMax uint16
-	Attempts   int
-	Failures   int
-	HTTPCode   int
-	ErrorCode  string
+	RTT           uint16
+	Request       uint16
+	RTTStd        uint16
+	RTTMax        uint16
+	RequestStd    uint16
+	RequestMax    uint16
+	Attempts      int
+	Failures      int
+	RTTFailures   int
+	HTTPCode      int
+	ErrorCode     string
+	ErrorPhase    string
+	RTTErrorCode  string
+	RTTErrorPhase string
 }
 
 func (m *Ping) Type() interfaces.SlaveRequestMacroType {

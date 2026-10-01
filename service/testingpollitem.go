@@ -66,7 +66,7 @@ func (t *TestingPollItem) Yield(idx int, p *taskpoll.TaskPollController) {
 	if t.onStage != nil {
 		t.onStage(idx, "connecting", true)
 	}
-	base := vendors.Build(ctx, t.request.Vendor, node.Name, node.Payload)
+	base := vendors.BuildNode(ctx, t.request.Vendor, node)
 	if t.onStage != nil {
 		t.onStage(idx, "connecting", false)
 	}
@@ -79,6 +79,15 @@ func (t *TestingPollItem) Yield(idx int, p *taskpoll.TaskPollController) {
 	}
 	proxy := vendors.WithContext(ctx, base)
 	result.ProxyInfo = proxy.ProxyInfo()
+	if node.Path != nil && node.Path.CheckURL != "" {
+		vendors.Report(proxy, "exit_check", true)
+		result.ExitCheck = checkExit(ctx, proxy, node.Path)
+		vendors.Report(proxy, "exit_check", false)
+		if result.ExitCheck.State != "passed" && result.ExitCheck.State != "observed" {
+			result.Error = result.ExitCheck.State
+			return
+		}
+	}
 	macroMap := structs.NewAsyncMap[interfaces.SlaveRequestMacroType, interfaces.SlaveRequestMacro]()
 	start := time.Now()
 	var wg sync.WaitGroup

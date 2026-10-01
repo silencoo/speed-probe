@@ -120,9 +120,13 @@ description 增加 cores 列表，每项包含 id、version、formats、features
 
 SPEED_AVERAGE payload 除 Value 外新增 TotalBytes、ElapsedMillis、StopReason。StopReason 为 duration、byte_limit、download_error、source_exhausted、cancelled。Value 是实际应用层正文量除以实际耗时（含建立连接）；仅 200／206 响应正文计入下载。SPEED_PER_SECOND 的最后一段可能不足一秒，该段按实际间隔归一化成 Byte/s。
 
-TEST_PING_CONN／TEST_PING_RTT payload 增加 Max、StdDev、Attempts、Failures、HTTPCode。每个采样新建连接，按 PingAverageOver 固定次数执行（取消除外），TaskTimeout 为每次采样超时，TaskRetry 不改变延迟样本数。RTT 字段在本版本表示建连耗时，HTTPS 包含 TLS 握手；HTTP Value 包含获取响应头的时间。延迟均值／标准差使用全部成功样本，不丢弃慢样本。Failures 表示网络请求失败，不表示 ICMP 丢包；HTTPCode 是最后一次成功收到的响应状态，403 等响应也代表网络可达。
+TEST_PING_CONN／TEST_PING_RTT payload 增加 Max、StdDev、Attempts、Failures、HTTPCode。每个采样新建请求连接，按 PingAverageOver 固定次数执行（取消除外），TaskTimeout 为每次采样超时，TaskRetry 不改变延迟样本数。RTT 字段在本版本表示建连耗时，HTTPS 包含目标 TLS 握手；HTTP Value 是从开始到获取响应头的累计耗时。两项分别统计成功样本：已成功建连但等待 HTTP 响应超时，仍保留 RTT，只有 HTTP 计为失败；目标 TLS 握手失败不算成功建连。延迟均值／标准差使用各自全部成功样本，不丢弃慢样本。Failures 表示对应项目的失败次数，不表示 ICMP 丢包；HTTPCode 是最后一次成功收到的响应状态，403 等响应也代表网络可达。
 
 延迟矩阵还可携带 `ErrorCode`，表示最后一次失败采样的安全分类：`timeout`、`dns_error`、`tls_error`、`connection_refused`、`connection_reset`、`connection_closed`、`cancelled`、`network_error`。全部成功时省略；部分失败时仍保留成功样本统计。原始错误（可能含节点地址或凭据）不会回传。旧控制端可忽略此字段。
+
+延迟矩阵可携带 `ErrorPhase=connect/tls/http`，表示最后一次对应失败发生在代理建连、目标 TLS 握手或 HTTP 响应阶段。两项的 `ErrorCode`、`ErrorPhase` 和 `Failures` 独立；HTTP 响应失败不写入成功连接项的错误。字段描述失败时正在执行的阶段，不单独证明责任方。此扩展不改变 v3 认证，无需轮换令牌。
+
+`TEST_PING_CONN` 可携带 `Connected=true`，表示至少一次成功完成代理建连及目标 TLS（HTTPS 时）。只请求 HTTP 矩阵时也保留这项证据，HTTP 响应超时不能据此把已建连节点判为完全不可达。未验证成功时省略；旧后端缺少此字段时控制端不推断连接成功。
 
 下载矩阵 `SPEED_AVERAGE` 也可携带 `ErrorCode` 和 `HTTPCode`。错误分类包含上述网络错误及 `http_error`（非 200/206 响应）、`empty_response`（空正文）。全程零字节的超时标记为 `download_error` + `timeout`；已收到数据并到达时长或流量上限仍属于正常停止，用户取消仍为 `cancelled`。不会回传原始错误文本或错误响应正文。
 
@@ -142,4 +146,33 @@ TEST_SCRIPT payload 保留 `Key`、`Text`、`Color`、`Background`、`TimeElapse
 
 `SPEED_AVERAGE` 和 `UPLOAD_SPEED` 新增 `SourceHealth=passed/failed`，错误时新增 `ErrorPhase=source_check/transfer`。这些状态只描述当前节点到当前测速目标的检测结果，不能单独判定节点是否可用。响应正文和原始网络错误不回传。
 
-声明 `stage_progress` 的后端允许 `Configs.StageProgress=true`；未启用时绝不发送阶段事件，以兼容旧控制端。启用后 accepted 与 finished 之间可发送 `type=stage`，包含 `index`（零基，省略表示 0）、`stage`、布尔 `active`。阶段为 connecting（准备内核）、download_check、download、upload_check、upload、ping、udp、geo、script；各独立项目可同时活跃，同类脚本合并为一个 script 阶段。节点 progress 和 finished 结束其所有活跃阶段。阶段事件仅表示当前操作，不携带百分比、地址或凭据，不增加已完成节点数。
+声明 `stage_progress` 的后端允许 `Configs.StageProgress=true`；未启用时绝不发送阶段事件，以兼容旧控制端。启用后 accepted 与 finished 之间可发送 `type=stage`，包含 `index`（零基，省略表示 0）、`stage`、布尔 `active`。阶段为 exit_check（校验出口 IP）、connecting（准备内核）、download_check、download、upload_check、upload、ping、udp、geo、script；各独立项目可同时活跃，同类脚本合并为一个 script 阶段。节点 progress 和 finished 结束其所有活跃阶段。阶段事件仅表示当前操作，不携带百分比、地址或凭据，不增加已完成节点数。
+
+## 链式路径
+
+describe 的顶层及 SingBox 内核 features 声明 `chain_paths`、`exit_verification`。Mihomo 单节点继续支持；路径只使用 SingBox。控制端必须先检查声明，旧后端缺少能力时拒绝；旧服务端的严格 JSON 解码也会拒绝未知 Path，不能静默忽略后测试直连。v3 认证和令牌不变。
+
+单节点的 Name/Payload 保持原样且不发送 Path。路径节点使用空 Payload：
+
+```json
+{
+  "Name": "Japan via Hong Kong",
+  "Payload": "",
+  "Path": {
+    "ID": "hk-jp",
+    "Name": "Japan via Hong Kong",
+    "Hops": [
+      {"ID":"hk","Name":"Hong Kong relay","Payload":"{\"type\":\"shadowsocks\",\"server\":\"relay.example.com\",\"server_port\":443,\"method\":\"2022-blake3-aes-128-gcm\",\"password\":\"YOUR_SS2022_KEY\"}"},
+      {"ID":"jp","Name":"Japan exit","Payload":"{\"type\":\"anytls\",\"server\":\"exit.example.com\",\"server_port\":443,\"password\":\"YOUR_ANYTLS_PASSWORD\",\"tls\":{\"enabled\":true,\"server_name\":\"exit.example.com\"}}"}
+    ],
+    "CheckURL":"https://ip-check.example.com/ip",
+    "ExpectedIP":"192.0.2.1"
+  }
+}
+```
+
+Hops 按探针 → 中继 → 最终出口排列。编译分别生成 `hop-0`、`hop-1`，后者 `detour:hop-0`；Route.Final 及 Vendor 拨号使用最后 outbound。没有备用 direct/selector，也不监听外部代理端口。所有宏复用该 Vendor，包括延迟、下载、上传、UDP、出口探测和脚本。
+
+校验稳定 ID、非空名称、1–8 唯一节点、standalone TCP 承载 outbound；允许 shadowsocks/anytls/socks/http/trojan/vmess/vless。拒绝缺失/重复节点、输入 detour/选择器/直接路由以及本地文件、插件、设备/路由绑定。编译器独占 detour，重复节点和外部边不可形成环路。UDP 从出口向上检查承载：TCP 封装型节点在上游只需 TCP，原始 UDP 节点仍需上游 UDP。QUIC 型路径暂不支持，原有单节点 QUIC 保留。
+
+CheckURL/ExpectedIP 可省略；预期 IP 需配置 URL。URL 必须 HTTP(S)、无用户信息/片段，10 秒期限、不跟随重定向、200 响应、正文最多 4 KiB，支持纯 IP 或 `{"ip":"…"}`。结果可携带 `exit_check:{ip,state}`，状态为 observed/passed/unexpected_exit_ip/exit_check_failed/exit_check_invalid_ip。失败时节点 error 使用对应安全状态码，不启动宏和大流量；不会回传响应正文或原始错误。历史路径快照由控制端私有保存，公共导出不包含 Hops.Payload。

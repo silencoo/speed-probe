@@ -6,6 +6,8 @@ speed-probe 是一个通过 WebSocket 接收任务的网络质量测试后端。
 
 本分支使用 [Mihomo](https://github.com/MetaCubeX/mihomo) 作为 Clash 内核，以支持包括 `2022-blake3` 在内的现代协议。
 
+内嵌 sing-box 还支持按真实流经顺序编排的多跳路径与可选出口 IP 校验。控制端通过 Web 管理节点、链路和定时计划，Telegram 选择方案和查看报告；新增路径需同时升级控制端与探针，见 [路径协议](PROTOCOL.md#链式路径)。单节点双内核测试保持兼容。
+
 ## 环境要求
 
 家庭 NAS 可使用 `agent -config agent.json -scripts probe-scripts.json` 主动连接 VPS 控制端，无需开放端口；Docker 使用 `compose.agent.yaml`，详见 [部署指南](DOCKER.md)。传统 `server` 模式仍可用。

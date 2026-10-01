@@ -3,6 +3,7 @@ package ping
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"github.com/silencoo/speed-probe/interfaces"
@@ -31,7 +32,7 @@ func TestSamplingIncludesFailuresAndStatus(t *testing.T) {
 	m.Run(vendors.WithContext(context.Background(), nil), &interfaces.SlaveRequest{Configs: interfaces.SlaveRequestConfigs{
 		PingAddress: server.URL, PingAverageOver: 4, TaskRetry: 1, TaskTimeout: 1000,
 	}})
-	if m.Attempts != 4 || m.Failures != 1 || m.HTTPCode != 403 || m.Request == 0 {
+	if m.Attempts != 4 || m.Failures != 1 || m.HTTPCode != 403 || m.Request == 0 || m.RTT == 0 || m.RTTFailures != 0 || m.RTTErrorCode != "" || m.ErrorPhase != "http" {
 		t.Fatalf("%+v", m)
 	}
 }
@@ -68,7 +69,56 @@ func TestTimeoutIsReportedInMeasurement(t *testing.T) {
 	m.Run(vendors.WithContext(context.Background(), nil), &interfaces.SlaveRequest{Configs: interfaces.SlaveRequestConfigs{
 		PingAddress: server.URL, PingAverageOver: 2, TaskTimeout: 20,
 	}})
-	if m.Attempts != 2 || m.Failures != 2 || m.ErrorCode != "timeout" || m.Request != 0 {
+	if m.Attempts != 2 || m.Failures != 2 || m.ErrorCode != "timeout" || m.Request != 0 || m.RTT == 0 || m.RTTFailures != 0 || m.RTTErrorCode != "" || m.ErrorPhase != "http" {
+		t.Fatalf("%+v", m)
+	}
+}
+
+func TestHTTPSHeaderTimeoutPreservesVerifiedTLSConnection(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	roots := x509.NewCertPool()
+	roots.AddCert(server.Certificate())
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	p := vendors.WithContext(ctx, nil)
+	rtt, delay, status, phase, err := sampleWithTransport(ctx, p, server.URL,
+		&http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots}})
+	if rtt == 0 || delay != 0 || status != 0 || phase != "http" || vendors.NetworkErrorCode(err) != "timeout" {
+		t.Fatalf("rtt=%d delay=%d status=%d phase=%s error=%v", rtt, delay, status, phase, err)
+	}
+}
+
+func TestTLSFailureDoesNotCountAsSuccessfulConnection(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+	m := &Ping{}
+	m.Run(vendors.WithContext(context.Background(), nil), &interfaces.SlaveRequest{Configs: interfaces.SlaveRequestConfigs{
+		PingAddress: server.URL, PingAverageOver: 1, TaskTimeout: 1000,
+	}})
+	if m.RTT != 0 || m.Request != 0 || m.RTTFailures != 1 || m.Failures != 1 ||
+		m.RTTErrorCode != "tls_error" || m.RTTErrorPhase != "tls" || m.ErrorPhase != "tls" {
+		t.Fatalf("%+v", m)
+	}
+}
+
+func TestDialFailureRemainsConnectionFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	listener.Close()
+	m := &Ping{}
+	m.Run(vendors.WithContext(context.Background(), nil), &interfaces.SlaveRequest{Configs: interfaces.SlaveRequestConfigs{
+		PingAddress: "http://" + address, PingAverageOver: 2, TaskTimeout: 1000,
+	}})
+	if m.RTT != 0 || m.Request != 0 || m.RTTFailures != 2 || m.Failures != 2 ||
+		m.RTTErrorCode == "" || m.RTTErrorCode != m.ErrorCode || m.RTTErrorPhase != "connect" || m.ErrorPhase != "connect" {
 		t.Fatalf("%+v", m)
 	}
 }

@@ -40,3 +40,13 @@ func Find(vendorType interfaces.VendorType) interfaces.Vendor {
 
 	return &invalid.Invalid{}
 }
+
+func BuildNode(ctx context.Context, kind interfaces.VendorType, node interfaces.SlaveRequestNode) interfaces.Vendor {
+	if node.Path == nil {
+		return Build(ctx, kind, node.Name, node.Payload)
+	}
+	if kind != interfaces.VendorSingBox {
+		return &invalid.Invalid{}
+	}
+	return (&singbox.SingBox{}).BuildPathContext(ctx, node.Path)
+}

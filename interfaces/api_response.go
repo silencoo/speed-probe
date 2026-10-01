@@ -1,8 +1,9 @@
 package interfaces
 
 type SlaveEntrySlot struct {
-	Error          string `json:"error,omitempty"`
-	Index          int    `json:"index"`
+	Error          string     `json:"error,omitempty"`
+	ExitCheck      *ExitCheck `json:"exit_check,omitempty"`
+	Index          int        `json:"index"`
 	Grouping       string
 	ProxyInfo      ProxyInfo
 	InvokeDuration int64

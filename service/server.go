@@ -105,6 +105,25 @@ func ServeSession(parent context.Context, conn ProtocolConnection, manager *auth
 		fail(cmd.TaskID, "permission_denied", err.Error())
 		return
 	}
+	for _, node := range req.Nodes {
+		if node.Path == nil {
+			continue
+		}
+		if req.Vendor != interfaces.VendorSingBox || node.Payload != "" {
+			fail(cmd.TaskID, "invalid_request", "Paths require SingBox and an empty node Payload")
+			return
+		}
+		udp := false
+		for _, m := range req.Options.Matrices {
+			if m.Type == interfaces.MatrixUDPType {
+				udp = true
+			}
+		}
+		if _, err := node.Path.Compile(udp); err != nil {
+			fail(cmd.TaskID, "invalid_request", err.Error())
+			return
+		}
+	}
 	caps, _ := auth.Required(req)
 	if utils.GCFG.NoSpeedFlag && auth.Has(caps, "speed") {
 		fail(cmd.TaskID, "permission_denied", "Speed tests disabled")
